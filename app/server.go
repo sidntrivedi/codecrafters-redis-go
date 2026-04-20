@@ -4,15 +4,23 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 )
 
-var kv map[string]string
+type ValueEntry struct {
+	value     string
+	expiresAt time.Time
+	hasExpiry bool
+}
+
+var kv map[string]ValueEntry
 
 func main() {
 	// You can use print statements as follows for debugging, they'll be visible when running tests.
 	fmt.Println("Logs from your program will appear here!")
-	kv = make(map[string]string)
+	kv = make(map[string]ValueEntry)
 
 	l, err := net.Listen("tcp", "0.0.0.0:6379")
 	if err != nil {
@@ -66,7 +74,26 @@ func handleConn(conn net.Conn) {
 
 // handleSetCmd handles the SET command.
 func handleSetCmd(conn net.Conn, message []string) error {
-	kv[message[4]] = message[6]
+	var timeout time.Duration
+	hasTimeout := false
+
+	// Check for EX and PX arguments with the SET command.
+	if len(message) > 8 && strings.ToLower(message[8]) == "ex" {
+		hasTimeout = true
+		t, _ := strconv.Atoi(message[10])
+		timeout = time.Duration(t) * time.Second
+	} else if len(message) > 8 && strings.ToLower(message[8]) == "px" {
+		hasTimeout = true
+		t, _ := strconv.Atoi(message[10])
+		timeout = time.Duration(t) * time.Millisecond
+	}
+
+	// Write the key value pair to map.
+	kv[message[4]] = ValueEntry{
+		value:     message[6],
+		hasExpiry: hasTimeout,
+		expiresAt: time.Now().Add(timeout),
+	}
 	_, err := conn.Write([]byte("+OK\r\n"))
 	if err != nil {
 		fmt.Println("Error writing message into connection: ", err.Error())
@@ -78,9 +105,11 @@ func handleSetCmd(conn net.Conn, message []string) error {
 // handleGetCmd gets the value of a key and returns it.
 func handleGetCmd(conn net.Conn, message []string) error {
 	resp := ""
-	if _, ok := kv[message[4]]; ok {
-		// $<length>\r\n<data>\r\n
-		resp = fmt.Sprintf("$%d\r\n%s\r\n", len(kv[message[4]]), kv[message[4]])
+	if val, ok := kv[message[4]]; ok {
+		if val.hasExpiry && !time.Now().After(val.expiresAt) || !val.hasExpiry {
+			// $<length>\r\n<data>\r\n
+			resp = fmt.Sprintf("$%d\r\n%s\r\n", len(kv[message[4]].value), kv[message[4]].value)
+		}
 	}
 
 	if resp == "" {
