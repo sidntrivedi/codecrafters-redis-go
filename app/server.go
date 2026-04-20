@@ -26,23 +26,28 @@ func main() {
 				fmt.Println("Error accepting connection: ", err.Error())
 				os.Exit(1)
 			}
-			// Read message from the connection and check if its PING.
-			data := make([]byte, 1024) // 1 KB buffer.
-			n, err := conn.Read(data)
-			if err != nil {
-				fmt.Println("Error reading message from connection: ", err.Error())
-				os.Exit(1)
-			}
 
-			message := data[:n]
-			fmt.Println(message)
-
-			_, err = conn.Write([]byte("+PONG\r\n"))
-			if err != nil {
-				fmt.Println("Error writing message into connection: ", err.Error())
-				os.Exit(1)
-			}
+			go handleConn(conn)
 		}
 	}()
 	wg.Wait()
+}
+
+func handleConn(conn net.Conn) {
+	// Read message from the connection and check if its PING.
+	data := make([]byte, 1024) // 1 KB buffer.
+	n, err := conn.Read(data)
+	if err != nil {
+		fmt.Println("Error reading message from connection: ", err.Error())
+		os.Exit(1)
+	}
+
+	message := data[:n]
+	fmt.Println(message)
+
+	_, err = conn.Write([]byte("+PONG\r\n"))
+	if err != nil {
+		fmt.Println("Error writing message into connection: ", err.Error())
+		os.Exit(1)
+	}
 }
