@@ -7,9 +7,12 @@ import (
 	"strings"
 )
 
+var kv map[string]string
+
 func main() {
 	// You can use print statements as follows for debugging, they'll be visible when running tests.
 	fmt.Println("Logs from your program will appear here!")
+	kv := make(map[string]string)
 
 	l, err := net.Listen("tcp", "0.0.0.0:6379")
 	if err != nil {
@@ -40,25 +43,37 @@ func handleConn(conn net.Conn) {
 			os.Exit(1)
 		}
 
-		// Need to parse input and extract second argument from it.
+		// Need to parse input and extract arguments from it.
 		m := string(data[:n])
 		message := strings.Split(m, "\r\n")
 
-		if message[2] == "ECHO" {
-			// Bulk string format: $<length>\r\n<data>\r\n
-			resp := fmt.Sprintf("$%d\r\n%s\r\n", len(message[4]), message[4])
-			_, err = conn.Write([]byte(resp))
+		switch message[2] {
+		case "ECHO":
+			handleEchoCmd(conn, message)
+		case "SET":
+			handleSetCmd(conn, message)
+		default:
+			_, err = conn.Write([]byte("+PONG\r\n"))
 			if err != nil {
 				fmt.Println("Error writing message into connection: ", err.Error())
 				os.Exit(1)
 			}
-			return
 		}
+	}
+}
 
-		_, err = conn.Write([]byte("+PONG\r\n"))
-		if err != nil {
-			fmt.Println("Error writing message into connection: ", err.Error())
-			os.Exit(1)
-		}
+// handleSetCmd handles the SET command.
+func handleSetCmd(conn net.Conn, message []string) error {
+	fmt.Println(message)
+}
+
+// handleEchoCmd handles the ECHO command.
+func handleEchoCmd(conn net.Conn, message []string) (err error) {
+	// Bulk string format: $<length>\r\n<data>\r\n
+	resp := fmt.Sprintf("$%d\r\n%s\r\n", len(message[4]), message[4])
+	_, err = conn.Write([]byte(resp))
+	if err != nil {
+		fmt.Println("Error writing message into connection: ", err.Error())
+		os.Exit(1)
 	}
 }
