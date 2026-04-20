@@ -91,6 +91,7 @@ func handleIncrCmd(conn net.Conn, message []string) error {
 		kv[key] = ValueEntry{
 			value: strconv.Itoa(1),
 		}
+		resp = ":1\r\n"
 	}
 
 	_, err := conn.Write([]byte(resp))
