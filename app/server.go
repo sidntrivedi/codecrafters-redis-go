@@ -32,7 +32,7 @@ func main() {
 	message := data[:n]
 	fmt.Println(message)
 
-	_, err = conn.Write([]byte("PONG\r\n"))
+	_, err = conn.Write([]byte("+PONG\r\n"))
 	if err != nil {
 		fmt.Println("Error writing message into connection: ", err.Error())
 		os.Exit(1)
