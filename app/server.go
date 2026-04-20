@@ -12,7 +12,7 @@ var kv map[string]string
 func main() {
 	// You can use print statements as follows for debugging, they'll be visible when running tests.
 	fmt.Println("Logs from your program will appear here!")
-	kv := make(map[string]string)
+	kv = make(map[string]string)
 
 	l, err := net.Listen("tcp", "0.0.0.0:6379")
 	if err != nil {
@@ -52,6 +52,8 @@ func handleConn(conn net.Conn) {
 			handleEchoCmd(conn, message)
 		case "SET":
 			handleSetCmd(conn, message)
+		case "GET":
+			handleGetCmd(conn, message)
 		default:
 			_, err = conn.Write([]byte("+PONG\r\n"))
 			if err != nil {
@@ -64,7 +66,33 @@ func handleConn(conn net.Conn) {
 
 // handleSetCmd handles the SET command.
 func handleSetCmd(conn net.Conn, message []string) error {
-	fmt.Println(message)
+	kv[message[4]] = message[6]
+	_, err := conn.Write([]byte("+OK\r\n"))
+	if err != nil {
+		fmt.Println("Error writing message into connection: ", err.Error())
+		os.Exit(1)
+	}
+	return nil
+}
+
+// handleGetCmd gets the value of a key and returns it.
+func handleGetCmd(conn net.Conn, message []string) error {
+	resp := ""
+	if _, ok := kv[message[4]]; ok {
+		// $<length>\r\n<data>\r\n
+		resp = fmt.Sprintf("$%d\r\n%s\r\n", len(kv[message[4]]), kv[message[4]])
+	}
+
+	if resp == "" {
+		resp = "$-1\r\n"
+	}
+
+	_, err := conn.Write([]byte(resp))
+	if err != nil {
+		fmt.Println("Error writing message into connection: ", err.Error())
+		os.Exit(1)
+	}
+	return nil
 }
 
 // handleEchoCmd handles the ECHO command.
@@ -76,4 +104,5 @@ func handleEchoCmd(conn net.Conn, message []string) (err error) {
 		fmt.Println("Error writing message into connection: ", err.Error())
 		os.Exit(1)
 	}
+	return nil
 }
