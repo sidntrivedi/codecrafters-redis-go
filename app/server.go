@@ -62,6 +62,8 @@ func handleConn(conn net.Conn) {
 			handleSetCmd(conn, message)
 		case "GET":
 			handleGetCmd(conn, message)
+		case "INCR":
+			handleIncrCmd(conn, message)
 		default:
 			_, err = conn.Write([]byte("+PONG\r\n"))
 			if err != nil {
@@ -70,6 +72,33 @@ func handleConn(conn net.Conn) {
 			}
 		}
 	}
+}
+
+func handleIncrCmd(conn net.Conn, message []string) error {
+	key := message[4]
+	resp := ""
+
+	val, ok := kv[key]
+	if ok {
+		intVal, _ := strconv.Atoi(val.value)
+		kv[key] = ValueEntry{
+			value:     strconv.Itoa(intVal + 1),
+			hasExpiry: val.hasExpiry,
+			expiresAt: val.expiresAt,
+		}
+		resp = fmt.Sprintf(":%s\r\n", kv[key].value)
+	} else {
+		kv[key] = ValueEntry{
+			value: strconv.Itoa(1),
+		}
+	}
+
+	_, err := conn.Write([]byte(resp))
+	if err != nil {
+		fmt.Println("Error writing message into connection: ", err.Error())
+		os.Exit(1)
+	}
+	return nil
 }
 
 // handleSetCmd handles the SET command.
