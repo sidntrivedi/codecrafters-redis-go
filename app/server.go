@@ -80,13 +80,19 @@ func handleIncrCmd(conn net.Conn, message []string) error {
 
 	val, ok := kv[key]
 	if ok {
-		intVal, _ := strconv.Atoi(val.value)
-		kv[key] = ValueEntry{
-			value:     strconv.Itoa(intVal + 1),
-			hasExpiry: val.hasExpiry,
-			expiresAt: val.expiresAt,
+		intVal, err := strconv.Atoi(val.value)
+		if err != nil {
+			resp = "-ERR value is not an integer or out of range\r\n"
 		}
-		resp = fmt.Sprintf(":%s\r\n", kv[key].value)
+
+		if resp == "" {
+			kv[key] = ValueEntry{
+				value:     strconv.Itoa(intVal + 1),
+				hasExpiry: val.hasExpiry,
+				expiresAt: val.expiresAt,
+			}
+			resp = fmt.Sprintf(":%s\r\n", kv[key].value)
+		}
 	} else {
 		kv[key] = ValueEntry{
 			value: strconv.Itoa(1),
