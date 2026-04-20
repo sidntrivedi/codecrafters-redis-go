@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sync"
 )
 
 func main() {
@@ -15,28 +16,33 @@ func main() {
 		fmt.Println("Failed to bind to port 6379")
 		os.Exit(1)
 	}
-	conn, err := l.Accept()
-	if err != nil {
-		fmt.Println("Error accepting connection: ", err.Error())
-		os.Exit(1)
-	}
 
-	for {
-		// Read message from the connection and check if its PING.
-		data := make([]byte, 1024) // 1 KB buffer.
-		n, err := conn.Read(data)
-		if err != nil {
-			fmt.Println("Error reading message from connection: ", err.Error())
-			os.Exit(1)
+	var wg sync.WaitGroup
+	wg.Add(1)
+	go func() {
+		for {
+			conn, err := l.Accept()
+			if err != nil {
+				fmt.Println("Error accepting connection: ", err.Error())
+				os.Exit(1)
+			}
+			// Read message from the connection and check if its PING.
+			data := make([]byte, 1024) // 1 KB buffer.
+			n, err := conn.Read(data)
+			if err != nil {
+				fmt.Println("Error reading message from connection: ", err.Error())
+				os.Exit(1)
+			}
+
+			message := data[:n]
+			fmt.Println(message)
+
+			_, err = conn.Write([]byte("+PONG\r\n"))
+			if err != nil {
+				fmt.Println("Error writing message into connection: ", err.Error())
+				os.Exit(1)
+			}
 		}
-
-		message := data[:n]
-		fmt.Println(message)
-
-		_, err = conn.Write([]byte("+PONG\r\n"))
-		if err != nil {
-			fmt.Println("Error writing message into connection: ", err.Error())
-			os.Exit(1)
-		}
-	}
+	}()
+	wg.Wait()
 }
