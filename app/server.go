@@ -28,17 +28,20 @@ func main() {
 
 // handleConn handles connection and responds to it.
 func handleConn(conn net.Conn) {
-	// Read message from the connection and check if its PING.
-	data := make([]byte, 1024) // 1 KB buffer.
-	_, err := conn.Read(data)
-	if err != nil {
-		fmt.Println("Error reading message from connection: ", err.Error())
-		os.Exit(1)
-	}
+	defer conn.Close()
+	for {
+		// Read message from the connection and check if its PING.
+		data := make([]byte, 1024) // 1 KB buffer.
+		_, err := conn.Read(data)
+		if err != nil {
+			fmt.Println("Error reading message from connection: ", err.Error())
+			os.Exit(1)
+		}
 
-	_, err = conn.Write([]byte("+PONG\r\n"))
-	if err != nil {
-		fmt.Println("Error writing message into connection: ", err.Error())
-		os.Exit(1)
+		_, err = conn.Write([]byte("+PONG\r\n"))
+		if err != nil {
+			fmt.Println("Error writing message into connection: ", err.Error())
+			os.Exit(1)
+		}
 	}
 }
