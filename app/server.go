@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strings"
 )
 
 func main() {
@@ -26,16 +27,32 @@ func main() {
 	}
 }
 
-// handleConn handles connection and responds to it.
+// handleConn handles a connection and responds to the messages being
+// written in it.
 func handleConn(conn net.Conn) {
 	defer conn.Close()
 	for {
 		// Read message from the connection and check if its PING.
 		data := make([]byte, 1024) // 1 KB buffer.
-		_, err := conn.Read(data)
+		n, err := conn.Read(data)
 		if err != nil {
 			fmt.Println("Error reading message from connection: ", err.Error())
 			os.Exit(1)
+		}
+
+		// Need to parse input and extract second argument from it.
+		m := string(data[:n])
+		message := strings.Split(m, "\r\n")
+
+		if message[2] == "ECHO" {
+			// Bulk string format: $<length>\r\n<data>\r\n
+			resp := fmt.Sprintf("$%d\r\n%s\r\n", len(message[4]), message[4])
+			_, err = conn.Write([]byte(resp))
+			if err != nil {
+				fmt.Println("Error writing message into connection: ", err.Error())
+				os.Exit(1)
+			}
+			return
 		}
 
 		_, err = conn.Write([]byte("+PONG\r\n"))
