@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net"
 	"os"
-	"sync"
 )
 
 func main() {
@@ -17,22 +16,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	var wg sync.WaitGroup
-	wg.Add(1)
-	go func() {
-		for {
-			conn, err := l.Accept()
-			if err != nil {
-				fmt.Println("Error accepting connection: ", err.Error())
-				os.Exit(1)
-			}
-
-			go handleConn(conn)
+	for {
+		conn, err := l.Accept()
+		if err != nil {
+			fmt.Println("Error accepting connection: ", err.Error())
+			os.Exit(1)
 		}
-	}()
-	wg.Wait()
+		go handleConn(conn)
+	}
 }
 
+// handleConn handles connection and responds to it.
 func handleConn(conn net.Conn) {
 	// Read message from the connection and check if its PING.
 	data := make([]byte, 1024) // 1 KB buffer.
