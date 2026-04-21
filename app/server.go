@@ -9,23 +9,24 @@ import (
 	"time"
 )
 
+type Client struct {
+	conn      net.Conn
+	cmdList   [][]string
+	queueCmds bool
+}
+
 type ValueEntry struct {
 	value     string
 	expiresAt time.Time
 	hasExpiry bool
 }
 
-var (
-	kv              map[string]ValueEntry
-	multiCmdInvoked bool
-	cmdList         [][]string // cmdList stores the commands list when MULTI is used.
-)
+var kv map[string]ValueEntry
 
 func main() {
 	// You can use print statements as follows for debugging, they'll be visible when running tests.
 	fmt.Println("Logs from your program will appear here!")
 	kv = make(map[string]ValueEntry)
-	multiCmdInvoked = false
 
 	l, err := net.Listen("tcp", "0.0.0.0:6379")
 	if err != nil {
@@ -39,18 +40,18 @@ func main() {
 			fmt.Println("Error accepting connection: ", err.Error())
 			os.Exit(1)
 		}
-		go handleConn(conn)
+		go handleConn(&Client{conn: conn})
 	}
 }
 
 // handleConn handles a connection and responds to the messages being
 // written in it.
-func handleConn(conn net.Conn) {
-	defer conn.Close()
+func handleConn(client *Client) {
+	defer client.conn.Close()
 	for {
 		// Read message from the connection and check if its PING.
 		data := make([]byte, 1024) // 1 KB buffer.
-		n, err := conn.Read(data)
+		n, err := client.conn.Read(data)
 		if err != nil {
 			fmt.Println("Error reading message from connection: ", err.Error())
 			os.Exit(1)
@@ -60,13 +61,13 @@ func handleConn(conn net.Conn) {
 		m := string(data[:n])
 		message := strings.Split(m, "\r\n")
 
-		resp, err := invokeCmdHandler(conn, message)
+		resp, err := invokeCmdHandler(client, message)
 		if err != nil {
 			fmt.Println("Error while invoking handler: ", err.Error())
 			os.Exit(1)
 		}
 
-		_, err = conn.Write([]byte(resp))
+		_, err = client.conn.Write([]byte(resp))
 		if err != nil {
 			fmt.Println("Error writing message into connection: ", err.Error())
 			os.Exit(1)
@@ -76,7 +77,7 @@ func handleConn(conn net.Conn) {
 
 // invokeCmdHandler handles invoking the right handler based on
 // the command passed by the user.
-func invokeCmdHandler(conn net.Conn, message []string) (string, error) {
+func invokeCmdHandler(client *Client, message []string) (string, error) {
 	resp := ""
 	var err error
 
@@ -87,27 +88,27 @@ func invokeCmdHandler(conn net.Conn, message []string) (string, error) {
 			return "", fmt.Errorf("error calling ECHO cmd: %w", err)
 		}
 	case "SET":
-		resp, err = handleSetCmd(message)
+		resp, err = handleSetCmd(client, message)
 		if err != nil {
 			return "", fmt.Errorf("error calling SET cmd: %w", err)
 		}
 	case "GET":
-		resp, err = handleGetCmd(message)
+		resp, err = handleGetCmd(client, message)
 		if err != nil {
 			return "", fmt.Errorf("error calling GET cmd: %w", err)
 		}
 	case "INCR":
-		resp, err = handleIncrCmd(message)
+		resp, err = handleIncrCmd(client, message)
 		if err != nil {
 			return "", fmt.Errorf("error calling INCR cmd: %w", err)
 		}
 	case "MULTI":
-		resp, err = handleMultiCmd()
+		resp, err = handleMultiCmd(client)
 		if err != nil {
 			return "", fmt.Errorf("error calling MULTI cmd: %w", err)
 		}
 	case "EXEC":
-		resp, err = handleExecCmd(conn)
+		resp, err = handleExecCmd(client)
 		if err != nil {
 			return "", fmt.Errorf("error calling EXEC cmd: %w", err)
 		}
@@ -117,22 +118,22 @@ func invokeCmdHandler(conn net.Conn, message []string) (string, error) {
 	return resp, nil
 }
 
-func handleExecCmd(conn net.Conn) (string, error) {
+func handleExecCmd(client *Client) (string, error) {
 	// Error out if the EXEC command is called without MULTI being
 	// invoked first.
-	if !multiCmdInvoked {
+	if !client.queueCmds {
 		return "-ERR EXEC without MULTI\r\n", nil
 	}
 
-	queuedCmds := cmdList
-	multiCmdInvoked = false
-	cmdList = nil
+	queuedCmds := client.cmdList
+	client.queueCmds = false
+	client.cmdList = nil
 
 	resp := fmt.Sprintf("*%d\r\n", len(queuedCmds))
 
 	// Execute all the queued commands one by one.
 	for _, msg := range queuedCmds {
-		cmdResp, err := invokeCmdHandler(conn, msg)
+		cmdResp, err := invokeCmdHandler(client, msg)
 		if err != nil {
 			return "", err
 		}
@@ -146,17 +147,17 @@ func handleExecCmd(conn net.Conn) (string, error) {
 // handleMultiCmd handles the MULTI command.
 // We need to queue the next commands now and execute them
 // sequentially once the EXEC command is passed.
-func handleMultiCmd() (string, error) {
-	multiCmdInvoked = true
-	cmdList = make([][]string, 0)
+func handleMultiCmd(client *Client) (string, error) {
+	client.queueCmds = true
+	client.cmdList = make([][]string, 0)
 
 	return "+OK\r\n", nil
 }
 
 // handleIncrCmd handles the INCR command.
-func handleIncrCmd(message []string) (string, error) {
-	if multiCmdInvoked {
-		cmdList = append(cmdList, message)
+func handleIncrCmd(client *Client, message []string) (string, error) {
+	if client.queueCmds {
+		client.cmdList = append(client.cmdList, message)
 		return "+QUEUED\r\n", nil
 	}
 
@@ -189,9 +190,9 @@ func handleIncrCmd(message []string) (string, error) {
 }
 
 // handleSetCmd handles the SET command.
-func handleSetCmd(message []string) (string, error) {
-	if multiCmdInvoked {
-		cmdList = append(cmdList, message)
+func handleSetCmd(client *Client, message []string) (string, error) {
+	if client.queueCmds {
+		client.cmdList = append(client.cmdList, message)
 		return "+QUEUED\r\n", nil
 	}
 
@@ -219,9 +220,9 @@ func handleSetCmd(message []string) (string, error) {
 }
 
 // handleGetCmd gets the value of a key and returns it.
-func handleGetCmd(message []string) (string, error) {
-	if multiCmdInvoked {
-		cmdList = append(cmdList, message)
+func handleGetCmd(client *Client, message []string) (string, error) {
+	if client.queueCmds {
+		client.cmdList = append(client.cmdList, message)
 		return "+QUEUED\r\n", nil
 	}
 
