@@ -82,27 +82,27 @@ func invokeCmdHandler(conn net.Conn, message []string) (string, error) {
 
 	switch message[2] {
 	case "ECHO":
-		resp, err = handleEchoCmd(conn, message)
+		resp, err = handleEchoCmd(message)
 		if err != nil {
 			return "", fmt.Errorf("error calling ECHO cmd: %w", err)
 		}
 	case "SET":
-		resp, err = handleSetCmd(conn, message)
+		resp, err = handleSetCmd(message)
 		if err != nil {
 			return "", fmt.Errorf("error calling SET cmd: %w", err)
 		}
 	case "GET":
-		resp, err = handleGetCmd(conn, message)
+		resp, err = handleGetCmd(message)
 		if err != nil {
 			return "", fmt.Errorf("error calling GET cmd: %w", err)
 		}
 	case "INCR":
-		resp, err = handleIncrCmd(conn, message)
+		resp, err = handleIncrCmd(message)
 		if err != nil {
 			return "", fmt.Errorf("error calling INCR cmd: %w", err)
 		}
 	case "MULTI":
-		resp, err = handleMultiCmd(conn)
+		resp, err = handleMultiCmd()
 		if err != nil {
 			return "", fmt.Errorf("error calling MULTI cmd: %w", err)
 		}
@@ -112,9 +112,7 @@ func invokeCmdHandler(conn net.Conn, message []string) (string, error) {
 			return "", fmt.Errorf("error calling EXEC cmd: %w", err)
 		}
 	default:
-		if _, err := conn.Write([]byte("+PONG\r\n")); err != nil {
-			return "", err
-		}
+		return "+PONG\r\n", nil
 	}
 	return resp, nil
 }
@@ -148,7 +146,7 @@ func handleExecCmd(conn net.Conn) (string, error) {
 // handleMultiCmd handles the MULTI command.
 // We need to queue the next commands now and execute them
 // sequentially once the EXEC command is passed.
-func handleMultiCmd(conn net.Conn) (string, error) {
+func handleMultiCmd() (string, error) {
 	multiCmdInvoked = true
 	cmdList = make([][]string, 0)
 
@@ -156,7 +154,7 @@ func handleMultiCmd(conn net.Conn) (string, error) {
 }
 
 // handleIncrCmd handles the INCR command.
-func handleIncrCmd(conn net.Conn, message []string) (string, error) {
+func handleIncrCmd(message []string) (string, error) {
 	if multiCmdInvoked {
 		cmdList = append(cmdList, message)
 		return "+QUEUED\r\n", nil
@@ -191,7 +189,7 @@ func handleIncrCmd(conn net.Conn, message []string) (string, error) {
 }
 
 // handleSetCmd handles the SET command.
-func handleSetCmd(conn net.Conn, message []string) (string, error) {
+func handleSetCmd(message []string) (string, error) {
 	if multiCmdInvoked {
 		cmdList = append(cmdList, message)
 		return "+QUEUED\r\n", nil
@@ -221,7 +219,7 @@ func handleSetCmd(conn net.Conn, message []string) (string, error) {
 }
 
 // handleGetCmd gets the value of a key and returns it.
-func handleGetCmd(conn net.Conn, message []string) (string, error) {
+func handleGetCmd(message []string) (string, error) {
 	if multiCmdInvoked {
 		cmdList = append(cmdList, message)
 		return "+QUEUED\r\n", nil
@@ -238,7 +236,7 @@ func handleGetCmd(conn net.Conn, message []string) (string, error) {
 }
 
 // handleEchoCmd handles the ECHO command.
-func handleEchoCmd(conn net.Conn, message []string) (string, error) {
+func handleEchoCmd(message []string) (string, error) {
 	// Bulk string format: $<length>\r\n<data>\r\n
 	return fmt.Sprintf("$%d\r\n%s\r\n", len(message[4]), message[4]), nil
 }
