@@ -141,6 +141,11 @@ func invokeCmdHandler(client *Client, message []string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("error calling RPUSH cmd: %w", err)
 		}
+	case "LLEN":
+		resp, err = handleLLENCmd(client, message)
+		if err != nil {
+			return "", fmt.Errorf("error calling LLEN cmd: %w", err)
+		}
 	default:
 		return "+PONG\r\n", nil
 	}
@@ -241,6 +246,31 @@ func handleLRANGECmd(client *Client, message []string) (string, error) {
 	}
 
 	return resp, nil
+}
+
+// handleLLENCmd handles the LLEN redis command.
+func handleLLENCmd(client *Client, message []string) (string, error) {
+	if client.queueCmds {
+		client.cmdList = append(client.cmdList, message)
+		return "+QUEUED\r\n", nil
+	}
+
+	key := message[4]
+	entry, ok := kv[key]
+	if !ok {
+		return ":0\r\n", nil
+	}
+
+	if isExpired(entry) {
+		delete(kv, key)
+		return ":0\r\n", nil
+	}
+
+	if entry.valueType != TypeList {
+		return "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n", nil
+	}
+
+	return fmt.Sprintf(":%d\r\n", len(entry.listValue)), nil
 }
 
 // handleRPUSHCmd handles the RPUSH redis cmd.
