@@ -9,6 +9,13 @@ import (
 	"time"
 )
 
+type ValueType string
+
+const (
+	TypeString ValueType = "string"
+	TypeList   ValueType = "list"
+)
+
 type Client struct {
 	conn      net.Conn
 	cmdList   [][]string
@@ -16,7 +23,9 @@ type Client struct {
 }
 
 type ValueEntry struct {
-	value     string
+	valueType ValueType
+	strValue  string
+	listValue []string
 	expiresAt time.Time
 	hasExpiry bool
 }
@@ -117,10 +126,54 @@ func invokeCmdHandler(client *Client, message []string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("error calling DISCARD cmd: %w", err)
 		}
+	case "RPUSH":
+		resp, err = handleRPUSHCmd(client, message)
+		if err != nil {
+			return "", fmt.Errorf("error calling RPUSH cmd: %w", err)
+		}
 	default:
 		return "+PONG\r\n", nil
 	}
 	return resp, nil
+}
+
+// handleRPUSHCmd handles the RPUSH redis cmd.
+func handleRPUSHCmd(client *Client, message []string) (string, error) {
+	if client.queueCmds {
+		client.cmdList = append(client.cmdList, message)
+		return "+QUEUED\r\n", nil
+	}
+
+	key := message[4]
+	values := make([]string, 0, (len(message)-6)/2)
+	for i := 6; i < len(message); i += 2 {
+		if message[i] == "" {
+			break
+		}
+		values = append(values, message[i])
+	}
+
+	entry, ok := kv[key]
+	if ok && isExpired(entry) {
+		delete(kv, key)
+		ok = false
+	}
+
+	if ok && entry.valueType != TypeList {
+		return "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n", nil
+	}
+
+	if !ok {
+		entry = ValueEntry{
+			valueType: TypeList,
+		}
+	}
+
+	entry.listValue = append(entry.listValue, values...)
+	entry.valueType = TypeList
+	kv[key] = entry
+
+	return fmt.Sprintf(":%d\r\n", len(entry.listValue)), nil
 }
 
 // handleDiscardCmd handles the redis DISCARD command.
@@ -188,22 +241,35 @@ func handleIncrCmd(client *Client, message []string) (string, error) {
 
 	val, ok := kv[key]
 	if ok {
-		intVal, err := strconv.Atoi(val.value)
+		if isExpired(val) {
+			delete(kv, key)
+			ok = false
+		}
+	}
+
+	if ok {
+		if val.valueType != TypeString {
+			return "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n", nil
+		}
+
+		intVal, err := strconv.Atoi(val.strValue)
 		if err != nil {
 			resp = "-ERR value is not an integer or out of range\r\n"
 		}
 
 		if resp == "" {
 			kv[key] = ValueEntry{
-				value:     strconv.Itoa(intVal + 1),
+				valueType: TypeString,
+				strValue:  strconv.Itoa(intVal + 1),
 				hasExpiry: val.hasExpiry,
 				expiresAt: val.expiresAt,
 			}
-			resp = fmt.Sprintf(":%s\r\n", kv[key].value)
+			resp = fmt.Sprintf(":%s\r\n", kv[key].strValue)
 		}
 	} else {
 		kv[key] = ValueEntry{
-			value: strconv.Itoa(1),
+			valueType: TypeString,
+			strValue:  strconv.Itoa(1),
 		}
 		resp = ":1\r\n"
 	}
@@ -234,7 +300,8 @@ func handleSetCmd(client *Client, message []string) (string, error) {
 
 	// Write the key value pair to map.
 	kv[message[4]] = ValueEntry{
-		value:     message[6],
+		valueType: TypeString,
+		strValue:  message[6],
 		hasExpiry: hasTimeout,
 		expiresAt: time.Now().Add(timeout),
 	}
@@ -249,10 +316,15 @@ func handleGetCmd(client *Client, message []string) (string, error) {
 	}
 
 	if val, ok := kv[message[4]]; ok {
-		if val.hasExpiry && !time.Now().After(val.expiresAt) || !val.hasExpiry {
-			// $<length>\r\n<data>\r\n
-			return fmt.Sprintf("$%d\r\n%s\r\n", len(kv[message[4]].value), kv[message[4]].value), nil
+		if isExpired(val) {
+			delete(kv, message[4])
+			return "$-1\r\n", nil
 		}
+		if val.valueType != TypeString {
+			return "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n", nil
+		}
+		// $<length>\r\n<data>\r\n
+		return fmt.Sprintf("$%d\r\n%s\r\n", len(val.strValue), val.strValue), nil
 	}
 
 	return "$-1\r\n", nil
@@ -262,4 +334,8 @@ func handleGetCmd(client *Client, message []string) (string, error) {
 func handleEchoCmd(message []string) (string, error) {
 	// Bulk string format: $<length>\r\n<data>\r\n
 	return fmt.Sprintf("$%d\r\n%s\r\n", len(message[4]), message[4]), nil
+}
+
+func isExpired(val ValueEntry) bool {
+	return val.hasExpiry && time.Now().After(val.expiresAt)
 }
