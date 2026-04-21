@@ -131,9 +131,72 @@ func invokeCmdHandler(client *Client, message []string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("error calling RPUSH cmd: %w", err)
 		}
+	case "LRANGE":
+		resp, err = handleLRANGECmd(client, message)
+		if err != nil {
+			return "", fmt.Errorf("error calling RPUSH cmd: %w", err)
+		}
 	default:
 		return "+PONG\r\n", nil
 	}
+	return resp, nil
+}
+
+// handleLRANGECmd handles the LRANGE redis command.
+func handleLRANGECmd(client *Client, message []string) (string, error) {
+	if client.queueCmds {
+		client.cmdList = append(client.cmdList, message)
+		return "+QUEUED\r\n", nil
+	}
+
+	key := message[4]
+	start, _ := strconv.Atoi(message[6])
+	stop, _ := strconv.Atoi(message[8])
+	// If the list doesn't exist, an empty array is returned.
+	entry, ok := kv[key]
+	if !ok {
+		return "*0\r\n", nil
+	}
+
+	// Handle the range if there are negative indexes.
+	if start < 0 {
+		start = len(entry.listValue) + start
+		// If a negative index is out of range (e.g., -6 on a list of length 5),
+		// it should be treated as 0 (the start of the list).
+		if start < 0 {
+			start = 0
+		}
+	}
+
+	if stop < 0 {
+		stop = len(entry.listValue) + stop
+		// If a negative index is out of range (e.g., -6 on a list of length 5),
+		// it should be treated as 0 (the start of the list).
+		if stop < 0 {
+			stop = 0
+		}
+	}
+
+	// If the start index is greater than the stop index, an empty array is returned.
+	if start > stop {
+		return "*0\r\n", nil
+	}
+
+	// If the start index is greater than or equal to the list's length, an empty array is returned.
+	if start > len(entry.listValue) {
+		return "*0\r\n", nil
+	}
+
+	// If the stop index is greater than or equal to the list's length, the stop index is treated as the last element.
+	if stop > len(entry.listValue) {
+		stop = len(entry.listValue) - 1
+	}
+
+	resp := fmt.Sprintf("*%d\r\n", (stop-start)+1)
+	for i := start; i <= stop; i++ {
+		resp = resp + fmt.Sprintf("$%d\r\n%s\r\n", len(entry.listValue[i]), entry.listValue[i])
+	}
+
 	return resp, nil
 }
 
