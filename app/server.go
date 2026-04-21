@@ -6,6 +6,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -15,6 +16,12 @@ const (
 	TypeString ValueType = "string"
 	TypeList   ValueType = "list"
 )
+
+type Server struct {
+	mu      sync.Mutex
+	kv      map[string]ValueEntry
+	waiters map[string][]chan string
+}
 
 type Client struct {
 	conn      net.Conn
@@ -30,12 +37,13 @@ type ValueEntry struct {
 	hasExpiry bool
 }
 
-var kv map[string]ValueEntry
-
 func main() {
 	// You can use print statements as follows for debugging, they'll be visible when running tests.
 	fmt.Println("Logs from your program will appear here!")
-	kv = make(map[string]ValueEntry)
+	server := &Server{
+		kv:      make(map[string]ValueEntry),
+		waiters: make(map[string][]chan string),
+	}
 
 	l, err := net.Listen("tcp", "0.0.0.0:6379")
 	if err != nil {
@@ -49,13 +57,13 @@ func main() {
 			fmt.Println("Error accepting connection: ", err.Error())
 			os.Exit(1)
 		}
-		go handleConn(&Client{conn: conn})
+		go server.handleConn(&Client{conn: conn})
 	}
 }
 
 // handleConn handles a connection and responds to the messages being
 // written in it.
-func handleConn(client *Client) {
+func (s *Server) handleConn(client *Client) {
 	defer client.conn.Close()
 	for {
 		// Read message from the connection and check if its PING.
@@ -70,7 +78,7 @@ func handleConn(client *Client) {
 		m := string(data[:n])
 		message := strings.Split(m, "\r\n")
 
-		resp, err := invokeCmdHandler(client, message)
+		resp, err := s.invokeCmdHandler(client, message)
 		if err != nil {
 			fmt.Println("Error while invoking handler: ", err.Error())
 			os.Exit(1)
@@ -86,7 +94,7 @@ func handleConn(client *Client) {
 
 // invokeCmdHandler handles invoking the right handler based on
 // the command passed by the user.
-func invokeCmdHandler(client *Client, message []string) (string, error) {
+func (s *Server) invokeCmdHandler(client *Client, message []string) (string, error) {
 	resp := ""
 	var err error
 
@@ -97,17 +105,17 @@ func invokeCmdHandler(client *Client, message []string) (string, error) {
 			return "", fmt.Errorf("error calling ECHO cmd: %w", err)
 		}
 	case "SET":
-		resp, err = handleSetCmd(client, message)
+		resp, err = s.handleSetCmd(client, message)
 		if err != nil {
 			return "", fmt.Errorf("error calling SET cmd: %w", err)
 		}
 	case "GET":
-		resp, err = handleGetCmd(client, message)
+		resp, err = s.handleGetCmd(client, message)
 		if err != nil {
 			return "", fmt.Errorf("error calling GET cmd: %w", err)
 		}
 	case "INCR":
-		resp, err = handleIncrCmd(client, message)
+		resp, err = s.handleIncrCmd(client, message)
 		if err != nil {
 			return "", fmt.Errorf("error calling INCR cmd: %w", err)
 		}
@@ -117,7 +125,7 @@ func invokeCmdHandler(client *Client, message []string) (string, error) {
 			return "", fmt.Errorf("error calling MULTI cmd: %w", err)
 		}
 	case "EXEC":
-		resp, err = handleExecCmd(client)
+		resp, err = s.handleExecCmd(client)
 		if err != nil {
 			return "", fmt.Errorf("error calling EXEC cmd: %w", err)
 		}
@@ -127,30 +135,36 @@ func invokeCmdHandler(client *Client, message []string) (string, error) {
 			return "", fmt.Errorf("error calling DISCARD cmd: %w", err)
 		}
 	case "RPUSH":
-		resp, err = handleRPUSHCmd(client, message)
+		resp, err = s.handleRPUSHCmd(client, message)
 		if err != nil {
 			return "", fmt.Errorf("error calling RPUSH cmd: %w", err)
 		}
 	case "LPUSH":
-		resp, err = handleLPUSHCmd(client, message)
+		resp, err = s.handleLPUSHCmd(client, message)
 		if err != nil {
 			return "", fmt.Errorf("error calling LPUSH cmd: %w", err)
 		}
 	case "LRANGE":
-		resp, err = handleLRANGECmd(client, message)
+		resp, err = s.handleLRANGECmd(client, message)
 		if err != nil {
 			return "", fmt.Errorf("error calling RPUSH cmd: %w", err)
 		}
 	case "LLEN":
-		resp, err = handleLLENCmd(client, message)
+		resp, err = s.handleLLENCmd(client, message)
 		if err != nil {
 			return "", fmt.Errorf("error calling LLEN cmd: %w", err)
 		}
 	case "LPOP":
-		resp, err = handleLPOPCmd(client, message)
+		resp, err = s.handleLPOPCmd(client, message)
 		if err != nil {
 			return "", fmt.Errorf("error calling LPOP cmd: %w", err)
 		}
+	case "BLPOP":
+		resp, err = s.handleBLPOPCmd(client, message)
+		if err != nil {
+			return "", fmt.Errorf("error calling LPOP cmd: %w", err)
+		}
+
 	default:
 		return "+PONG\r\n", nil
 	}
@@ -158,7 +172,7 @@ func invokeCmdHandler(client *Client, message []string) (string, error) {
 }
 
 // handleLPUSHCmd handles the LPUSH redis cmd.
-func handleLPUSHCmd(client *Client, message []string) (string, error) {
+func (s *Server) handleLPUSHCmd(client *Client, message []string) (string, error) {
 	if client.queueCmds {
 		client.cmdList = append(client.cmdList, message)
 		return "+QUEUED\r\n", nil
@@ -167,9 +181,12 @@ func handleLPUSHCmd(client *Client, message []string) (string, error) {
 	key := message[4]
 	values := extractListValues(message)
 
-	entry, ok := kv[key]
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entry, ok := s.kv[key]
 	if ok && isExpired(entry) {
-		delete(kv, key)
+		delete(s.kv, key)
 		ok = false
 	}
 
@@ -190,13 +207,19 @@ func handleLPUSHCmd(client *Client, message []string) (string, error) {
 	newList = append(newList, entry.listValue...)
 	entry.listValue = newList
 	entry.valueType = TypeList
-	kv[key] = entry
+	respLen := len(entry.listValue)
+	s.deliverWaitingBLPOP(key, &entry)
+	if len(entry.listValue) == 0 {
+		delete(s.kv, key)
+	} else {
+		s.kv[key] = entry
+	}
 
-	return fmt.Sprintf(":%d\r\n", len(entry.listValue)), nil
+	return fmt.Sprintf(":%d\r\n", respLen), nil
 }
 
 // handleLRANGECmd handles the LRANGE redis command.
-func handleLRANGECmd(client *Client, message []string) (string, error) {
+func (s *Server) handleLRANGECmd(client *Client, message []string) (string, error) {
 	if client.queueCmds {
 		client.cmdList = append(client.cmdList, message)
 		return "+QUEUED\r\n", nil
@@ -206,7 +229,7 @@ func handleLRANGECmd(client *Client, message []string) (string, error) {
 	start, _ := strconv.Atoi(message[6])
 	stop, _ := strconv.Atoi(message[8])
 	// If the list doesn't exist, an empty array is returned.
-	entry, ok := kv[key]
+	entry, ok := s.kv[key]
 	if !ok {
 		return "*0\r\n", nil
 	}
@@ -254,20 +277,20 @@ func handleLRANGECmd(client *Client, message []string) (string, error) {
 }
 
 // handleLLENCmd handles the LLEN redis command.
-func handleLLENCmd(client *Client, message []string) (string, error) {
+func (s *Server) handleLLENCmd(client *Client, message []string) (string, error) {
 	if client.queueCmds {
 		client.cmdList = append(client.cmdList, message)
 		return "+QUEUED\r\n", nil
 	}
 
 	key := message[4]
-	entry, ok := kv[key]
+	entry, ok := s.kv[key]
 	if !ok {
 		return ":0\r\n", nil
 	}
 
 	if isExpired(entry) {
-		delete(kv, key)
+		delete(s.kv, key)
 		return ":0\r\n", nil
 	}
 
@@ -278,8 +301,77 @@ func handleLLENCmd(client *Client, message []string) (string, error) {
 	return fmt.Sprintf(":%d\r\n", len(entry.listValue)), nil
 }
 
+// handleBLPOPCmd handles the BLPOP redis command.
+func (s *Server) handleBLPOPCmd(client *Client, message []string) (string, error) {
+	if client.queueCmds {
+		client.cmdList = append(client.cmdList, message)
+		return "+QUEUED\r\n", nil
+	}
+
+	key := message[4]
+	timeoutSeconds, err := strconv.ParseFloat(message[6], 64)
+	if err != nil || timeoutSeconds < 0 {
+		return "-ERR timeout is not a float or out of range\r\n", nil
+	}
+
+	s.mu.Lock()
+	entry, ok := s.kv[key]
+
+	// If the key is present, pop it and return the response.
+	if ok {
+		if isExpired(entry) {
+			delete(s.kv, key)
+			ok = false
+		} else if entry.valueType != TypeList {
+			s.mu.Unlock()
+			return "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n", nil
+		} else if len(entry.listValue) > 0 {
+			value := entry.listValue[0]
+			entry.listValue = entry.listValue[1:]
+
+			if len(entry.listValue) == 0 {
+				delete(s.kv, key)
+			} else {
+				s.kv[key] = entry
+			}
+
+			s.mu.Unlock()
+			return fmt.Sprintf("*2\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(key), key, len(value), value), nil
+		}
+	}
+
+	// If the key is not present, need to add waiter for it.
+	// Update the RPUSH and LPUSH functions to invoke the waiter
+	// as soon a key is pushed.
+	waiter := make(chan string, 1)
+	s.waiters[key] = append(s.waiters[key], waiter)
+	s.mu.Unlock()
+
+	if timeoutSeconds == 0 {
+		value := <-waiter
+		return fmt.Sprintf("*2\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(key), key, len(value), value), nil
+	}
+
+	timer := time.NewTimer(time.Duration(timeoutSeconds * float64(time.Second)))
+	defer timer.Stop()
+
+	select {
+	case value := <-waiter:
+		return fmt.Sprintf("*2\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(key), key, len(value), value), nil
+	case <-timer.C:
+		s.mu.Lock()
+		removed := s.removeWaiter(key, waiter)
+		s.mu.Unlock()
+		if !removed {
+			value := <-waiter
+			return fmt.Sprintf("*2\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(key), key, len(value), value), nil
+		}
+		return "*-1\r\n", nil
+	}
+}
+
 // handleLPOPCmd handles the LPOP redis command.
-func handleLPOPCmd(client *Client, message []string) (string, error) {
+func (s *Server) handleLPOPCmd(client *Client, message []string) (string, error) {
 	if client.queueCmds {
 		client.cmdList = append(client.cmdList, message)
 		return "+QUEUED\r\n", nil
@@ -296,7 +388,7 @@ func handleLPOPCmd(client *Client, message []string) (string, error) {
 		count = parsedCount
 	}
 
-	entry, ok := kv[key]
+	entry, ok := s.kv[key]
 	if !ok {
 		if hasCount {
 			return "*-1\r\n", nil
@@ -305,7 +397,7 @@ func handleLPOPCmd(client *Client, message []string) (string, error) {
 	}
 
 	if isExpired(entry) {
-		delete(kv, key)
+		delete(s.kv, key)
 		if hasCount {
 			return "*-1\r\n", nil
 		}
@@ -317,7 +409,7 @@ func handleLPOPCmd(client *Client, message []string) (string, error) {
 	}
 
 	if len(entry.listValue) == 0 {
-		delete(kv, key)
+		delete(s.kv, key)
 		if hasCount {
 			return "*-1\r\n", nil
 		}
@@ -329,9 +421,9 @@ func handleLPOPCmd(client *Client, message []string) (string, error) {
 		entry.listValue = entry.listValue[1:]
 
 		if len(entry.listValue) == 0 {
-			delete(kv, key)
+			delete(s.kv, key)
 		} else {
-			kv[key] = entry
+			s.kv[key] = entry
 		}
 
 		return fmt.Sprintf("$%d\r\n%s\r\n", len(value), value), nil
@@ -345,9 +437,9 @@ func handleLPOPCmd(client *Client, message []string) (string, error) {
 	entry.listValue = entry.listValue[count:]
 
 	if len(entry.listValue) == 0 {
-		delete(kv, key)
+		delete(s.kv, key)
 	} else {
-		kv[key] = entry
+		s.kv[key] = entry
 	}
 
 	resp := fmt.Sprintf("*%d\r\n", len(poppedValues))
@@ -359,7 +451,7 @@ func handleLPOPCmd(client *Client, message []string) (string, error) {
 }
 
 // handleRPUSHCmd handles the RPUSH redis cmd.
-func handleRPUSHCmd(client *Client, message []string) (string, error) {
+func (s *Server) handleRPUSHCmd(client *Client, message []string) (string, error) {
 	if client.queueCmds {
 		client.cmdList = append(client.cmdList, message)
 		return "+QUEUED\r\n", nil
@@ -368,9 +460,12 @@ func handleRPUSHCmd(client *Client, message []string) (string, error) {
 	key := message[4]
 	values := extractListValues(message)
 
-	entry, ok := kv[key]
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entry, ok := s.kv[key]
 	if ok && isExpired(entry) {
-		delete(kv, key)
+		delete(s.kv, key)
 		ok = false
 	}
 
@@ -386,9 +481,15 @@ func handleRPUSHCmd(client *Client, message []string) (string, error) {
 
 	entry.listValue = append(entry.listValue, values...)
 	entry.valueType = TypeList
-	kv[key] = entry
+	respLen := len(entry.listValue)
+	s.deliverWaitingBLPOP(key, &entry)
+	if len(entry.listValue) == 0 {
+		delete(s.kv, key)
+	} else {
+		s.kv[key] = entry
+	}
 
-	return fmt.Sprintf(":%d\r\n", len(entry.listValue)), nil
+	return fmt.Sprintf(":%d\r\n", respLen), nil
 }
 
 // handleDiscardCmd handles the redis DISCARD command.
@@ -408,7 +509,7 @@ func handleDiscardCmd(client *Client) (string, error) {
 }
 
 // handleExecCmd handles the redis EXEC command.
-func handleExecCmd(client *Client) (string, error) {
+func (s *Server) handleExecCmd(client *Client) (string, error) {
 	// Error out if the EXEC command is called without MULTI being
 	// invoked first.
 	if !client.queueCmds {
@@ -423,7 +524,7 @@ func handleExecCmd(client *Client) (string, error) {
 
 	// Execute all the queued commands one by one.
 	for _, msg := range queuedCmds {
-		cmdResp, err := invokeCmdHandler(client, msg)
+		cmdResp, err := s.invokeCmdHandler(client, msg)
 		if err != nil {
 			return "", err
 		}
@@ -445,7 +546,7 @@ func handleMultiCmd(client *Client) (string, error) {
 }
 
 // handleIncrCmd handles the INCR command.
-func handleIncrCmd(client *Client, message []string) (string, error) {
+func (s *Server) handleIncrCmd(client *Client, message []string) (string, error) {
 	if client.queueCmds {
 		client.cmdList = append(client.cmdList, message)
 		return "+QUEUED\r\n", nil
@@ -454,10 +555,10 @@ func handleIncrCmd(client *Client, message []string) (string, error) {
 	key := message[4]
 	resp := ""
 
-	val, ok := kv[key]
+	val, ok := s.kv[key]
 	if ok {
 		if isExpired(val) {
-			delete(kv, key)
+			delete(s.kv, key)
 			ok = false
 		}
 	}
@@ -473,16 +574,16 @@ func handleIncrCmd(client *Client, message []string) (string, error) {
 		}
 
 		if resp == "" {
-			kv[key] = ValueEntry{
+			s.kv[key] = ValueEntry{
 				valueType: TypeString,
 				strValue:  strconv.Itoa(intVal + 1),
 				hasExpiry: val.hasExpiry,
 				expiresAt: val.expiresAt,
 			}
-			resp = fmt.Sprintf(":%s\r\n", kv[key].strValue)
+			resp = fmt.Sprintf(":%s\r\n", s.kv[key].strValue)
 		}
 	} else {
-		kv[key] = ValueEntry{
+		s.kv[key] = ValueEntry{
 			valueType: TypeString,
 			strValue:  strconv.Itoa(1),
 		}
@@ -493,7 +594,7 @@ func handleIncrCmd(client *Client, message []string) (string, error) {
 }
 
 // handleSetCmd handles the SET command.
-func handleSetCmd(client *Client, message []string) (string, error) {
+func (s *Server) handleSetCmd(client *Client, message []string) (string, error) {
 	if client.queueCmds {
 		client.cmdList = append(client.cmdList, message)
 		return "+QUEUED\r\n", nil
@@ -514,7 +615,7 @@ func handleSetCmd(client *Client, message []string) (string, error) {
 	}
 
 	// Write the key value pair to map.
-	kv[message[4]] = ValueEntry{
+	s.kv[message[4]] = ValueEntry{
 		valueType: TypeString,
 		strValue:  message[6],
 		hasExpiry: hasTimeout,
@@ -524,15 +625,15 @@ func handleSetCmd(client *Client, message []string) (string, error) {
 }
 
 // handleGetCmd gets the value of a key and returns it.
-func handleGetCmd(client *Client, message []string) (string, error) {
+func (s *Server) handleGetCmd(client *Client, message []string) (string, error) {
 	if client.queueCmds {
 		client.cmdList = append(client.cmdList, message)
 		return "+QUEUED\r\n", nil
 	}
 
-	if val, ok := kv[message[4]]; ok {
+	if val, ok := s.kv[message[4]]; ok {
 		if isExpired(val) {
-			delete(kv, message[4])
+			delete(s.kv, message[4])
 			return "$-1\r\n", nil
 		}
 		if val.valueType != TypeString {
@@ -561,6 +662,40 @@ func extractListValues(message []string) []string {
 	}
 
 	return values
+}
+
+func (s *Server) deliverWaitingBLPOP(key string, entry *ValueEntry) {
+	waiters := s.waiters[key]
+	for len(waiters) > 0 && len(entry.listValue) > 0 {
+		waiter := waiters[0]
+		waiters = waiters[1:]
+		value := entry.listValue[0]
+		entry.listValue = entry.listValue[1:]
+		waiter <- value
+	}
+
+	if len(waiters) == 0 {
+		delete(s.waiters, key)
+	} else {
+		s.waiters[key] = waiters
+	}
+}
+
+func (s *Server) removeWaiter(key string, target chan string) bool {
+	waiters := s.waiters[key]
+	for i, waiter := range waiters {
+		if waiter == target {
+			waiters = append(waiters[:i], waiters[i+1:]...)
+			if len(waiters) == 0 {
+				delete(s.waiters, key)
+			} else {
+				s.waiters[key] = waiters
+			}
+			return true
+		}
+	}
+
+	return false
 }
 
 func isExpired(val ValueEntry) bool {
