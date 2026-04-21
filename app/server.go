@@ -146,6 +146,11 @@ func invokeCmdHandler(client *Client, message []string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("error calling LLEN cmd: %w", err)
 		}
+	case "LPOP":
+		resp, err = handleLPOPCmd(client, message)
+		if err != nil {
+			return "", fmt.Errorf("error calling LPOP cmd: %w", err)
+		}
 	default:
 		return "+PONG\r\n", nil
 	}
@@ -271,6 +276,45 @@ func handleLLENCmd(client *Client, message []string) (string, error) {
 	}
 
 	return fmt.Sprintf(":%d\r\n", len(entry.listValue)), nil
+}
+
+// handleLPOPCmd handles the LPOP redis command.
+func handleLPOPCmd(client *Client, message []string) (string, error) {
+	if client.queueCmds {
+		client.cmdList = append(client.cmdList, message)
+		return "+QUEUED\r\n", nil
+	}
+
+	key := message[4]
+	entry, ok := kv[key]
+	if !ok {
+		return "$-1\r\n", nil
+	}
+
+	if isExpired(entry) {
+		delete(kv, key)
+		return "$-1\r\n", nil
+	}
+
+	if entry.valueType != TypeList {
+		return "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n", nil
+	}
+
+	if len(entry.listValue) == 0 {
+		delete(kv, key)
+		return "$-1\r\n", nil
+	}
+
+	value := entry.listValue[0]
+	entry.listValue = entry.listValue[1:]
+
+	if len(entry.listValue) == 0 {
+		delete(kv, key)
+	} else {
+		kv[key] = entry
+	}
+
+	return fmt.Sprintf("$%d\r\n%s\r\n", len(value), value), nil
 }
 
 // handleRPUSHCmd handles the RPUSH redis cmd.
