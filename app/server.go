@@ -131,6 +131,11 @@ func invokeCmdHandler(client *Client, message []string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("error calling RPUSH cmd: %w", err)
 		}
+	case "LPUSH":
+		resp, err = handleLPUSHCmd(client, message)
+		if err != nil {
+			return "", fmt.Errorf("error calling LPUSH cmd: %w", err)
+		}
 	case "LRANGE":
 		resp, err = handleLRANGECmd(client, message)
 		if err != nil {
@@ -140,6 +145,44 @@ func invokeCmdHandler(client *Client, message []string) (string, error) {
 		return "+PONG\r\n", nil
 	}
 	return resp, nil
+}
+
+// handleLPUSHCmd handles the LPUSH redis cmd.
+func handleLPUSHCmd(client *Client, message []string) (string, error) {
+	if client.queueCmds {
+		client.cmdList = append(client.cmdList, message)
+		return "+QUEUED\r\n", nil
+	}
+
+	key := message[4]
+	values := extractListValues(message)
+
+	entry, ok := kv[key]
+	if ok && isExpired(entry) {
+		delete(kv, key)
+		ok = false
+	}
+
+	if ok && entry.valueType != TypeList {
+		return "-WRONGTYPE Operation against a key holding the wrong kind of value\r\n", nil
+	}
+
+	if !ok {
+		entry = ValueEntry{
+			valueType: TypeList,
+		}
+	}
+
+	newList := make([]string, 0, len(values)+len(entry.listValue))
+	for i := len(values) - 1; i >= 0; i-- {
+		newList = append(newList, values[i])
+	}
+	newList = append(newList, entry.listValue...)
+	entry.listValue = newList
+	entry.valueType = TypeList
+	kv[key] = entry
+
+	return fmt.Sprintf(":%d\r\n", len(entry.listValue)), nil
 }
 
 // handleLRANGECmd handles the LRANGE redis command.
@@ -208,13 +251,7 @@ func handleRPUSHCmd(client *Client, message []string) (string, error) {
 	}
 
 	key := message[4]
-	values := make([]string, 0, (len(message)-6)/2)
-	for i := 6; i < len(message); i += 2 {
-		if message[i] == "" {
-			break
-		}
-		values = append(values, message[i])
-	}
+	values := extractListValues(message)
 
 	entry, ok := kv[key]
 	if ok && isExpired(entry) {
@@ -397,6 +434,18 @@ func handleGetCmd(client *Client, message []string) (string, error) {
 func handleEchoCmd(message []string) (string, error) {
 	// Bulk string format: $<length>\r\n<data>\r\n
 	return fmt.Sprintf("$%d\r\n%s\r\n", len(message[4]), message[4]), nil
+}
+
+func extractListValues(message []string) []string {
+	values := make([]string, 0, (len(message)-6)/2)
+	for i := 6; i < len(message); i += 2 {
+		if message[i] == "" {
+			break
+		}
+		values = append(values, message[i])
+	}
+
+	return values
 }
 
 func isExpired(val ValueEntry) bool {
