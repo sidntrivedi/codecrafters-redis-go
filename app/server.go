@@ -286,13 +286,29 @@ func handleLPOPCmd(client *Client, message []string) (string, error) {
 	}
 
 	key := message[4]
+	count := 1
+	hasCount := len(message) > 6 && message[6] != ""
+	if hasCount {
+		parsedCount, err := strconv.Atoi(message[6])
+		if err != nil || parsedCount <= 0 {
+			return "-ERR value is out of range, must be positive\r\n", nil
+		}
+		count = parsedCount
+	}
+
 	entry, ok := kv[key]
 	if !ok {
+		if hasCount {
+			return "*-1\r\n", nil
+		}
 		return "$-1\r\n", nil
 	}
 
 	if isExpired(entry) {
 		delete(kv, key)
+		if hasCount {
+			return "*-1\r\n", nil
+		}
 		return "$-1\r\n", nil
 	}
 
@@ -302,11 +318,31 @@ func handleLPOPCmd(client *Client, message []string) (string, error) {
 
 	if len(entry.listValue) == 0 {
 		delete(kv, key)
+		if hasCount {
+			return "*-1\r\n", nil
+		}
 		return "$-1\r\n", nil
 	}
 
-	value := entry.listValue[0]
-	entry.listValue = entry.listValue[1:]
+	if !hasCount {
+		value := entry.listValue[0]
+		entry.listValue = entry.listValue[1:]
+
+		if len(entry.listValue) == 0 {
+			delete(kv, key)
+		} else {
+			kv[key] = entry
+		}
+
+		return fmt.Sprintf("$%d\r\n%s\r\n", len(value), value), nil
+	}
+
+	if count > len(entry.listValue) {
+		count = len(entry.listValue)
+	}
+
+	poppedValues := entry.listValue[:count]
+	entry.listValue = entry.listValue[count:]
 
 	if len(entry.listValue) == 0 {
 		delete(kv, key)
@@ -314,7 +350,12 @@ func handleLPOPCmd(client *Client, message []string) (string, error) {
 		kv[key] = entry
 	}
 
-	return fmt.Sprintf("$%d\r\n%s\r\n", len(value), value), nil
+	resp := fmt.Sprintf("*%d\r\n", len(poppedValues))
+	for _, value := range poppedValues {
+		resp += fmt.Sprintf("$%d\r\n%s\r\n", len(value), value)
+	}
+
+	return resp, nil
 }
 
 // handleRPUSHCmd handles the RPUSH redis cmd.
