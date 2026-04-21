@@ -15,12 +15,16 @@ type ValueEntry struct {
 	hasExpiry bool
 }
 
-var kv map[string]ValueEntry
+var (
+	kv              map[string]ValueEntry
+	multiCmdInvoked bool
+)
 
 func main() {
 	// You can use print statements as follows for debugging, they'll be visible when running tests.
 	fmt.Println("Logs from your program will appear here!")
 	kv = make(map[string]ValueEntry)
+	multiCmdInvoked = false
 
 	l, err := net.Listen("tcp", "0.0.0.0:6379")
 	if err != nil {
@@ -64,6 +68,8 @@ func handleConn(conn net.Conn) {
 			handleGetCmd(conn, message)
 		case "INCR":
 			handleIncrCmd(conn, message)
+		case "MULTI":
+			handleMultiCmd(conn)
 		default:
 			_, err = conn.Write([]byte("+PONG\r\n"))
 			if err != nil {
@@ -74,7 +80,29 @@ func handleConn(conn net.Conn) {
 	}
 }
 
+// handleMultiCmd handles the MULTI command.
+func handleMultiCmd(conn net.Conn) error {
+	multiCmdInvoked = true
+
+	_, err := conn.Write([]byte("+OK\r\n"))
+	if err != nil {
+		fmt.Println("Error writing message into connection: ", err.Error())
+		os.Exit(1)
+	}
+	return nil
+}
+
+// handleIncrCmd handles the INCR command.
 func handleIncrCmd(conn net.Conn, message []string) error {
+	if multiCmdInvoked {
+		_, err := conn.Write([]byte("+QUEUED\r\n"))
+		if err != nil {
+			fmt.Println("Error writing message into connection: ", err.Error())
+			os.Exit(1)
+		}
+		return nil
+	}
+
 	key := message[4]
 	resp := ""
 
@@ -110,6 +138,14 @@ func handleIncrCmd(conn net.Conn, message []string) error {
 
 // handleSetCmd handles the SET command.
 func handleSetCmd(conn net.Conn, message []string) error {
+	if multiCmdInvoked {
+		_, err := conn.Write([]byte("+QUEUED\r\n"))
+		if err != nil {
+			fmt.Println("Error writing message into connection: ", err.Error())
+			os.Exit(1)
+		}
+		return nil
+	}
 	var timeout time.Duration
 	hasTimeout := false
 
