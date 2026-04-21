@@ -112,12 +112,34 @@ func invokeCmdHandler(client *Client, message []string) (string, error) {
 		if err != nil {
 			return "", fmt.Errorf("error calling EXEC cmd: %w", err)
 		}
+	case "DISCARD":
+		resp, err = handleDiscardCmd(client)
+		if err != nil {
+			return "", fmt.Errorf("error calling DISCARD cmd: %w", err)
+		}
 	default:
 		return "+PONG\r\n", nil
 	}
 	return resp, nil
 }
 
+// handleDiscardCmd handles the redis DISCARD command.
+func handleDiscardCmd(client *Client) (string, error) {
+	// Error out if the DISCARD command is called without MULTI being
+	// invoked first.
+	if !client.queueCmds {
+		return "-ERR DISCARD without MULTI\r\n", nil
+	}
+
+	// Discard all the queued commands and set
+	// queueCmds to false.
+	client.queueCmds = false
+	client.cmdList = nil
+
+	return "+OK\r\n", nil
+}
+
+// handleExecCmd handles the redis EXEC command.
 func handleExecCmd(client *Client) (string, error) {
 	// Error out if the EXEC command is called without MULTI being
 	// invoked first.
