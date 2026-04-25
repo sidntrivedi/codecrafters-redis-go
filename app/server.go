@@ -219,7 +219,7 @@ func (s *Server) handlePublishCmd(client *Client, message []string) (string, err
 	}
 
 	channel := message[4]
-	return fmt.Sprintf("(integer) %d", s.subscriberCount(channel)), nil
+	return fmt.Sprintf(":%d\r\n", s.subscriberCount(channel)), nil
 }
 
 // handleSubscribeCmd handles the SUBSCRIBE redis cmd.
