@@ -29,9 +29,10 @@ var allowedSubscribeCmds = map[string]struct{}{
 }
 
 type Server struct {
-	mu      sync.Mutex
-	kv      map[string]ValueEntry
-	waiters map[string][]chan string
+	mu          sync.Mutex
+	kv          map[string]ValueEntry
+	waiters     map[string][]chan string
+	subscribers map[string]map[*Client]struct{}
 }
 
 type Client struct {
@@ -43,7 +44,7 @@ type Client struct {
 
 type SubscribeMode struct {
 	enabled  bool
-	channels []string
+	channels map[string]struct{}
 }
 
 type ValueEntry struct {
@@ -58,8 +59,9 @@ func main() {
 	// You can use print statements as follows for debugging, they'll be visible when running tests.
 	fmt.Println("Logs from your program will appear here!")
 	server := &Server{
-		kv:      make(map[string]ValueEntry),
-		waiters: make(map[string][]chan string),
+		kv:          make(map[string]ValueEntry),
+		waiters:     make(map[string][]chan string),
+		subscribers: make(map[string]map[*Client]struct{}),
 	}
 
 	l, err := net.Listen("tcp", "0.0.0.0:6379")
@@ -184,12 +186,17 @@ func (s *Server) invokeCmdHandler(client *Client, message []string) (string, err
 	case "BLPOP":
 		resp, err = s.handleBLPOPCmd(client, message)
 		if err != nil {
-			return "", fmt.Errorf("error calling LPOP cmd: %w", err)
+			return "", fmt.Errorf("error calling BLPOP cmd: %w", err)
 		}
 	case "SUBSCRIBE":
 		resp, err = s.handleSubscribeCmd(client, message)
 		if err != nil {
-			return "", fmt.Errorf("error calling LPOP cmd: %w", err)
+			return "", fmt.Errorf("error calling SUBSCRIBE cmd: %w", err)
+		}
+	case "PUBLISH":
+		resp, err = s.handlePublishCmd(client, message)
+		if err != nil {
+			return "", fmt.Errorf("error calling PUBLISH cmd: %w", err)
 		}
 	default:
 		if client.subscribeMode.enabled {
@@ -205,6 +212,16 @@ func isAllowedInSubscribeMode(cmd string) bool {
 	return ok
 }
 
+func (s *Server) handlePublishCmd(client *Client, message []string) (string, error) {
+	if client.queueCmds {
+		client.cmdList = append(client.cmdList, message)
+		return "+QUEUED\r\n", nil
+	}
+
+	channel := message[4]
+	return fmt.Sprintf("(integer) %d", s.subscriberCount(channel)), nil
+}
+
 // handleSubscribeCmd handles the SUBSCRIBE redis cmd.
 func (s *Server) handleSubscribeCmd(client *Client, message []string) (string, error) {
 	if client.queueCmds {
@@ -212,17 +229,31 @@ func (s *Server) handleSubscribeCmd(client *Client, message []string) (string, e
 		return "+QUEUED\r\n", nil
 	}
 
-	// Add the channels passed to the client channels slice.
+	// Track the subscription from both directions:
+	// client -> channels for subscription count, channel -> clients for publish.
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
 	channel := message[4]
-	client.subscribeMode = SubscribeMode{
-		enabled:  true,
-		channels: append(client.subscribeMode.channels, channel),
+	if client.subscribeMode.channels == nil {
+		client.subscribeMode.channels = make(map[string]struct{})
 	}
+	client.subscribeMode.enabled = true
+	client.subscribeMode.channels[channel] = struct{}{}
+
+	if s.subscribers[channel] == nil {
+		s.subscribers[channel] = make(map[*Client]struct{})
+	}
+	s.subscribers[channel][client] = struct{}{}
 
 	return fmt.Sprintf("*3\r\n$9\r\nsubscribe\r\n$%d\r\n%s\r\n:%d\r\n", len(channel), channel, len(client.subscribeMode.channels)), nil
+}
+
+func (s *Server) subscriberCount(channel string) int {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return len(s.subscribers[channel])
 }
 
 // handleLPUSHCmd handles the LPUSH redis cmd.
