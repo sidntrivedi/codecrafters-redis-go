@@ -28,9 +28,15 @@ var allowedSubscribeCmds = map[string]struct{}{
 	"QUIT":         {},
 }
 
+type SortedSet struct {
+	Member string
+	Score  float64
+}
+
 type Server struct {
 	mu          sync.Mutex
 	kv          map[string]ValueEntry
+	sset        map[string]SortedSet
 	waiters     map[string][]chan string
 	subscribers map[string]map[*Client]struct{}
 }
@@ -66,6 +72,7 @@ func main() {
 	fmt.Println("Logs from your program will appear here!")
 	server := &Server{
 		kv:          make(map[string]ValueEntry),
+		sset:        make(map[string]SortedSet),
 		waiters:     make(map[string][]chan string),
 		subscribers: make(map[string]map[*Client]struct{}),
 	}
@@ -216,6 +223,11 @@ func (s *Server) invokeCmdHandler(client *Client, message []string) (string, err
 		if err != nil {
 			return "", fmt.Errorf("error calling PUBLISH cmd: %w", err)
 		}
+	case "ZADD":
+		resp, err = s.handleZADDcmd(client, message)
+		if err != nil {
+			return "", fmt.Errorf("error calling ZADD cmd: %w", err)
+		}
 	default:
 		if client.subscribeMode.enabled {
 			return "*2\r\n$4\r\npong\r\n$0\r\n\r\n", nil
@@ -239,7 +251,31 @@ func (client *Client) writePubSubMessages() {
 			os.Exit(1)
 		}
 	}
+}
 
+// handleZADDcmd handles the ZADD redis cmd.
+func (s *Server) handleZADDcmd(client *Client, message []string) (string, error) {
+	if client.queueCmds {
+		client.cmdList = append(client.cmdList, message)
+		return "+QUEUED\r\n", nil
+	}
+
+	set, value, name := message[4], message[6], message[8]
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// convert score to float64.
+	val, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return "", err
+	}
+
+	s.sset[set] = SortedSet{
+		Member: name,
+		Score:  val,
+	}
+
+	return ":1\r\n", nil
 }
 
 // handlePublishCmd handles the PUBLISH redis cmd.
