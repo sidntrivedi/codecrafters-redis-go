@@ -27,6 +27,7 @@ type Client struct {
 	conn      net.Conn
 	cmdList   [][]string
 	queueCmds bool
+	channels  []string
 }
 
 type ValueEntry struct {
@@ -164,11 +165,31 @@ func (s *Server) invokeCmdHandler(client *Client, message []string) (string, err
 		if err != nil {
 			return "", fmt.Errorf("error calling LPOP cmd: %w", err)
 		}
-
+	case "SUBSCRIBE":
+		resp, err = s.handleSubscribeCmd(client, message)
+		if err != nil {
+			return "", fmt.Errorf("error calling LPOP cmd: %w", err)
+		}
 	default:
 		return "+PONG\r\n", nil
 	}
 	return resp, nil
+}
+
+func (s *Server) handleSubscribeCmd(client *Client, message []string) (string, error) {
+	if client.queueCmds {
+		client.cmdList = append(client.cmdList, message)
+		return "+QUEUED\r\n", nil
+	}
+
+	// Add the channels passed to the client channels slice.
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	channel := message[4]
+	client.channels = append(client.channels, channel)
+
+	return fmt.Sprintf("*3\r\n$9\r\nsubscribe\r\n$%d\r\n%s\r\n:%d\r\n", len(channel), channel, len(client.channels)), nil
 }
 
 // handleLPUSHCmd handles the LPUSH redis cmd.
