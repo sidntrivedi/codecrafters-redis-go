@@ -17,6 +17,17 @@ const (
 	TypeList   ValueType = "list"
 )
 
+// allowedSubscribeCmds contains the list of commands
+// that are allowed when redis is in subscribe mode.
+var allowedSubscribeCmds = map[string]struct{}{
+	"SUBSCRIBE":    {},
+	"UNSUBSCRIBE":  {},
+	"PSUBSCRIBE":   {},
+	"PUNSUBSCRIBE": {},
+	"PING":         {},
+	"QUIT":         {},
+}
+
 type Server struct {
 	mu      sync.Mutex
 	kv      map[string]ValueEntry
@@ -24,10 +35,15 @@ type Server struct {
 }
 
 type Client struct {
-	conn      net.Conn
-	cmdList   [][]string
-	queueCmds bool
-	channels  []string
+	conn          net.Conn
+	cmdList       [][]string
+	queueCmds     bool
+	subscribeMode SubscribeMode
+}
+
+type SubscribeMode struct {
+	enabled  bool
+	channels []string
 }
 
 type ValueEntry struct {
@@ -98,8 +114,13 @@ func (s *Server) handleConn(client *Client) {
 func (s *Server) invokeCmdHandler(client *Client, message []string) (string, error) {
 	resp := ""
 	var err error
+	cmd := strings.ToUpper(message[2])
 
-	switch message[2] {
+	if client.subscribeMode.enabled && !isAllowedInSubscribeMode(cmd) {
+		return fmt.Sprintf("-ERR Can't execute '%s': only (P|S)SUBSCRIBE / (P|S)UNSUBSCRIBE / PING / QUIT are allowed in this context\r\n", cmd), nil
+	}
+
+	switch cmd {
 	case "ECHO":
 		resp, err = handleEchoCmd(message)
 		if err != nil {
@@ -176,6 +197,12 @@ func (s *Server) invokeCmdHandler(client *Client, message []string) (string, err
 	return resp, nil
 }
 
+func isAllowedInSubscribeMode(cmd string) bool {
+	_, ok := allowedSubscribeCmds[cmd]
+	return ok
+}
+
+// handleSubscribeCmd handles the SUBSCRIBE redis cmd.
 func (s *Server) handleSubscribeCmd(client *Client, message []string) (string, error) {
 	if client.queueCmds {
 		client.cmdList = append(client.cmdList, message)
@@ -187,9 +214,12 @@ func (s *Server) handleSubscribeCmd(client *Client, message []string) (string, e
 	defer s.mu.Unlock()
 
 	channel := message[4]
-	client.channels = append(client.channels, channel)
+	client.subscribeMode = SubscribeMode{
+		enabled:  true,
+		channels: append(client.subscribeMode.channels, channel),
+	}
 
-	return fmt.Sprintf("*3\r\n$9\r\nsubscribe\r\n$%d\r\n%s\r\n:%d\r\n", len(channel), channel, len(client.channels)), nil
+	return fmt.Sprintf("*3\r\n$9\r\nsubscribe\r\n$%d\r\n%s\r\n:%d\r\n", len(channel), channel, len(client.subscribeMode.channels)), nil
 }
 
 // handleLPUSHCmd handles the LPUSH redis cmd.
