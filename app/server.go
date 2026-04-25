@@ -40,6 +40,12 @@ type Client struct {
 	cmdList       [][]string
 	queueCmds     bool
 	subscribeMode SubscribeMode
+	messages      chan MessageInfo
+}
+
+type MessageInfo struct {
+	channel string
+	message string
 }
 
 type SubscribeMode struct {
@@ -76,7 +82,10 @@ func main() {
 			fmt.Println("Error accepting connection: ", err.Error())
 			os.Exit(1)
 		}
-		go server.handleConn(&Client{conn: conn})
+		go server.handleConn(&Client{
+			conn:     conn,
+			messages: make(chan MessageInfo),
+		})
 	}
 }
 
@@ -84,6 +93,9 @@ func main() {
 // written in it.
 func (s *Server) handleConn(client *Client) {
 	defer client.conn.Close()
+
+	go client.writePubSubMessages()
+
 	for {
 		// Read message from the connection and check if its PING.
 		data := make([]byte, 1024) // 1 KB buffer.
@@ -193,6 +205,7 @@ func (s *Server) invokeCmdHandler(client *Client, message []string) (string, err
 		if err != nil {
 			return "", fmt.Errorf("error calling SUBSCRIBE cmd: %w", err)
 		}
+
 	case "PUBLISH":
 		resp, err = s.handlePublishCmd(client, message)
 		if err != nil {
@@ -212,6 +225,19 @@ func isAllowedInSubscribeMode(cmd string) bool {
 	return ok
 }
 
+func (client *Client) writePubSubMessages() {
+	for msg := range client.messages {
+		resp := fmt.Sprintf("*3\r\n$7\r\nmessage\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n", len(msg.channel), msg.channel, len(msg.message), msg.message)
+		_, err := client.conn.Write([]byte(resp))
+		if err != nil {
+			fmt.Println("Error writing message into connection: ", err.Error())
+			os.Exit(1)
+		}
+	}
+
+}
+
+// handlePublishCmd handles the PUBLISH redis cmd.
 func (s *Server) handlePublishCmd(client *Client, message []string) (string, error) {
 	if client.queueCmds {
 		client.cmdList = append(client.cmdList, message)
@@ -219,6 +245,15 @@ func (s *Server) handlePublishCmd(client *Client, message []string) (string, err
 	}
 
 	channel := message[4]
+	msg := message[6]
+
+	for subscriber := range s.subscribers[channel] {
+		subscriber.messages <- MessageInfo{
+			channel: channel,
+			message: msg,
+		}
+	}
+
 	return fmt.Sprintf(":%d\r\n", s.subscriberCount(channel)), nil
 }
 
