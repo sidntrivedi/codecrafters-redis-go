@@ -28,15 +28,10 @@ var allowedSubscribeCmds = map[string]struct{}{
 	"QUIT":         {},
 }
 
-type SortedSet struct {
-	Member string
-	Score  float64
-}
-
 type Server struct {
 	mu          sync.Mutex
 	kv          map[string]ValueEntry
-	sset        map[string]SortedSet
+	sset        map[string]map[string]float64
 	waiters     map[string][]chan string
 	subscribers map[string]map[*Client]struct{}
 }
@@ -72,7 +67,7 @@ func main() {
 	fmt.Println("Logs from your program will appear here!")
 	server := &Server{
 		kv:          make(map[string]ValueEntry),
-		sset:        make(map[string]SortedSet),
+		sset:        make(map[string]map[string]float64),
 		waiters:     make(map[string][]chan string),
 		subscribers: make(map[string]map[*Client]struct{}),
 	}
@@ -270,9 +265,15 @@ func (s *Server) handleZADDcmd(client *Client, message []string) (string, error)
 		return "", err
 	}
 
-	s.sset[set] = SortedSet{
-		Member: name,
-		Score:  val,
+	if s.sset[set] == nil {
+		s.sset[set] = make(map[string]float64)
+	}
+
+	_, alreadyExists := s.sset[set][name]
+	s.sset[set][name] = val
+
+	if alreadyExists {
+		return ":0\r\n", nil
 	}
 
 	return ":1\r\n", nil
