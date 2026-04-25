@@ -205,6 +205,11 @@ func (s *Server) invokeCmdHandler(client *Client, message []string) (string, err
 		if err != nil {
 			return "", fmt.Errorf("error calling SUBSCRIBE cmd: %w", err)
 		}
+	case "UNSUBSCRIBE":
+		resp, err = s.handleUnsubscribeCmd(client, message)
+		if err != nil {
+			return "", fmt.Errorf("error calling UNSUBSCRIBE cmd: %w", err)
+		}
 
 	case "PUBLISH":
 		resp, err = s.handlePublishCmd(client, message)
@@ -282,6 +287,34 @@ func (s *Server) handleSubscribeCmd(client *Client, message []string) (string, e
 	s.subscribers[channel][client] = struct{}{}
 
 	return fmt.Sprintf("*3\r\n$9\r\nsubscribe\r\n$%d\r\n%s\r\n:%d\r\n", len(channel), channel, len(client.subscribeMode.channels)), nil
+}
+
+// handleUnsubscribeCmd handles the UNSUBSCRIBE redis cmd.
+func (s *Server) handleUnsubscribeCmd(client *Client, message []string) (string, error) {
+	if client.queueCmds {
+		client.cmdList = append(client.cmdList, message)
+		return "+QUEUED\r\n", nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	channel := message[4]
+	delete(client.subscribeMode.channels, channel)
+
+	if subscribers, ok := s.subscribers[channel]; ok {
+		delete(subscribers, client)
+		if len(subscribers) == 0 {
+			delete(s.subscribers, channel)
+		}
+	}
+
+	remaining := len(client.subscribeMode.channels)
+	if remaining == 0 {
+		client.subscribeMode.enabled = false
+	}
+
+	return fmt.Sprintf("*3\r\n$11\r\nunsubscribe\r\n$%d\r\n%s\r\n:%d\r\n", len(channel), channel, remaining), nil
 }
 
 func (s *Server) subscriberCount(channel string) int {
