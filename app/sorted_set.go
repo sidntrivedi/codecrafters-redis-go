@@ -126,6 +126,28 @@ func (s *Server) handleZCARDcmd(client *Client, message []string) (string, error
 	return fmt.Sprintf(":%d\r\n", len(s.sset[set])), nil
 }
 
+// handleZSCOREcmd handles the ZSCORE redis cmd.
+func (s *Server) handleZSCOREcmd(client *Client, message []string) (string, error) {
+	if client.queueCmds {
+		client.cmdList = append(client.cmdList, message)
+		return "+QUEUED\r\n", nil
+	}
+
+	set := message[4]
+	member := message[6]
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	score, ok := s.sset[set][member]
+	if !ok {
+		return "$-1\r\n", nil
+	}
+
+	scoreStr := strconv.FormatFloat(score, 'f', -1, 64)
+	return fmt.Sprintf("$%d\r\n%s\r\n", len(scoreStr), scoreStr), nil
+}
+
 // handleZADDcmd handles the ZADD redis cmd.
 func (s *Server) handleZADDcmd(client *Client, message []string) (string, error) {
 	if client.queueCmds {
