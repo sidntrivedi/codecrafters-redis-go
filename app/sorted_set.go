@@ -66,9 +66,24 @@ func (s *Server) handleZRANGECmd(client *Client, message []string) (string, erro
 	if err != nil {
 		return "", err
 	}
+
+	if start < 0 {
+		start = len(s.sset[set]) + start
+		if start < 0 {
+			start = 0
+		}
+	}
+
 	stop, err := strconv.Atoi(message[8])
 	if err != nil {
 		return "", err
+	}
+
+	if stop < 0 {
+		stop = len(s.sset[set]) + stop
+		if stop < 0 {
+			stop = 0
+		}
 	}
 
 	s.mu.Lock()
