@@ -1,0 +1,127 @@
+package main
+
+import (
+	"fmt"
+	"sort"
+	"strconv"
+)
+
+type sortedSetEntry struct {
+	member string
+	score  float64
+}
+
+func sortedSetEntries(set map[string]float64) []sortedSetEntry {
+	entries := make([]sortedSetEntry, 0, len(set))
+	for member, score := range set {
+		entries = append(entries, sortedSetEntry{member: member, score: score})
+	}
+
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].score != entries[j].score {
+			return entries[i].score < entries[j].score
+		}
+		return entries[i].member < entries[j].member
+	})
+
+	return entries
+}
+
+// handleZRANKCmd handles the ZRANK redis cmd.
+func (s *Server) handleZRANKCmd(client *Client, message []string) (string, error) {
+	if client.queueCmds {
+		client.cmdList = append(client.cmdList, message)
+		return "+QUEUED\r\n", nil
+	}
+
+	set := message[4]
+	memberName := message[6]
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// In case the member doesn't exist, return null string.
+	if _, ok := s.sset[set][memberName]; !ok {
+		return "$-1\r\n", nil
+	}
+
+	for idx, entry := range sortedSetEntries(s.sset[set]) {
+		if entry.member == memberName {
+			return fmt.Sprintf(":%d\r\n", idx), nil
+		}
+	}
+
+	return "$-1\r\n", nil
+}
+
+// handleZRANGECmd handles the ZRANGE redis cmd.
+func (s *Server) handleZRANGECmd(client *Client, message []string) (string, error) {
+	if client.queueCmds {
+		client.cmdList = append(client.cmdList, message)
+		return "+QUEUED\r\n", nil
+	}
+
+	set := message[4]
+	start, err := strconv.Atoi(message[6])
+	if err != nil {
+		return "", err
+	}
+	stop, err := strconv.Atoi(message[8])
+	if err != nil {
+		return "", err
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	entries := sortedSetEntries(s.sset[set])
+	if len(entries) == 0 {
+		return "*0\r\n", nil
+	}
+
+	if start >= len(entries) || start > stop {
+		return "*0\r\n", nil
+	}
+
+	if stop >= len(entries) {
+		stop = len(entries) - 1
+	}
+
+	resp := fmt.Sprintf("*%d\r\n", (stop-start)+1)
+	for i := start; i <= stop; i++ {
+		member := entries[i].member
+		resp += fmt.Sprintf("$%d\r\n%s\r\n", len(member), member)
+	}
+
+	return resp, nil
+}
+
+// handleZADDcmd handles the ZADD redis cmd.
+func (s *Server) handleZADDcmd(client *Client, message []string) (string, error) {
+	if client.queueCmds {
+		client.cmdList = append(client.cmdList, message)
+		return "+QUEUED\r\n", nil
+	}
+
+	set, value, name := message[4], message[6], message[8]
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// convert score to float64.
+	val, err := strconv.ParseFloat(value, 64)
+	if err != nil {
+		return "", err
+	}
+
+	if s.sset[set] == nil {
+		s.sset[set] = make(map[string]float64)
+	}
+
+	_, alreadyExists := s.sset[set][name]
+	s.sset[set][name] = val
+	if alreadyExists {
+		return ":0\r\n", nil
+	}
+
+	return ":1\r\n", nil
+}
