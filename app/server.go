@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -223,6 +224,11 @@ func (s *Server) invokeCmdHandler(client *Client, message []string) (string, err
 		if err != nil {
 			return "", fmt.Errorf("error calling ZADD cmd: %w", err)
 		}
+	case "ZRANK":
+		resp, err = s.handleZRANKCmd(client, message)
+		if err != nil {
+			return "", fmt.Errorf("error calling ZADD cmd: %w", err)
+		}
 	default:
 		if client.subscribeMode.enabled {
 			return "*2\r\n$4\r\npong\r\n$0\r\n\r\n", nil
@@ -248,6 +254,53 @@ func (client *Client) writePubSubMessages() {
 	}
 }
 
+// handleZRANKCmd handles the ZRANK redis cmd.
+func (s *Server) handleZRANKCmd(client *Client, message []string) (string, error) {
+	if client.queueCmds {
+		client.cmdList = append(client.cmdList, message)
+		return "+QUEUED\r\n", nil
+	}
+
+	set := message[4]
+	memberName := message[6]
+
+	// In case the member doesn't exist, return null string.
+	if _, ok := s.sset[set][memberName]; !ok {
+		return "$-1\r\n", nil
+	}
+	fmt.Println(s.sset)
+
+	type kv struct {
+		key   string
+		value float64
+	}
+
+	// Sort the set at the time of adding.
+	// Firstly sort by values, if in any case
+	// the values for two members are same, then arrange lexicographically.
+	kvSlice := []kv{}
+	for k, v := range s.sset[set] {
+		kvSlice = append(kvSlice, kv{k, v})
+	}
+
+	sort.Slice(kvSlice, func(i, j int) bool {
+		if kvSlice[i].value != kvSlice[j].value {
+			return kvSlice[i].value < kvSlice[j].value // Primary: Value
+		}
+		return kvSlice[i].key < kvSlice[j].key // Secondary: Lexicographical Key
+	})
+
+	idx := 0
+	for i := 0; i < len(kvSlice); i++ {
+		if kvSlice[i].key == memberName {
+			idx = i
+			break
+		}
+	}
+
+	return fmt.Sprintf(":%d\r\n", idx), nil
+}
+
 // handleZADDcmd handles the ZADD redis cmd.
 func (s *Server) handleZADDcmd(client *Client, message []string) (string, error) {
 	if client.queueCmds {
@@ -271,7 +324,6 @@ func (s *Server) handleZADDcmd(client *Client, message []string) (string, error)
 
 	_, alreadyExists := s.sset[set][name]
 	s.sset[set][name] = val
-
 	if alreadyExists {
 		return ":0\r\n", nil
 	}
