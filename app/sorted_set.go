@@ -148,6 +148,36 @@ func (s *Server) handleZSCOREcmd(client *Client, message []string) (string, erro
 	return fmt.Sprintf("$%d\r\n%s\r\n", len(scoreStr), scoreStr), nil
 }
 
+// handleZREMcmd handles the ZREM redis cmd.
+func (s *Server) handleZREMcmd(client *Client, message []string) (string, error) {
+	if client.queueCmds {
+		client.cmdList = append(client.cmdList, message)
+		return "+QUEUED\r\n", nil
+	}
+
+	set := message[4]
+	member := message[6]
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	members, ok := s.sset[set]
+	if !ok {
+		return ":0\r\n", nil
+	}
+
+	if _, ok := members[member]; !ok {
+		return ":0\r\n", nil
+	}
+
+	delete(members, member)
+	if len(members) == 0 {
+		delete(s.sset, set)
+	}
+
+	return ":1\r\n", nil
+}
+
 // handleZADDcmd handles the ZADD redis cmd.
 func (s *Server) handleZADDcmd(client *Client, message []string) (string, error) {
 	if client.queueCmds {
