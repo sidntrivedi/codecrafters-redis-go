@@ -111,6 +111,21 @@ func (s *Server) handleZRANGECmd(client *Client, message []string) (string, erro
 	return resp, nil
 }
 
+// handleZCARDcmd handles the ZCARD redis cmd.
+func (s *Server) handleZCARDcmd(client *Client, message []string) (string, error) {
+	if client.queueCmds {
+		client.cmdList = append(client.cmdList, message)
+		return "+QUEUED\r\n", nil
+	}
+
+	set := message[4]
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	return fmt.Sprintf(":%d\r\n", len(s.sset[set])), nil
+}
+
 // handleZADDcmd handles the ZADD redis cmd.
 func (s *Server) handleZADDcmd(client *Client, message []string) (string, error) {
 	if client.queueCmds {
