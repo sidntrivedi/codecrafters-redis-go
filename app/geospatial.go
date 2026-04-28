@@ -1,6 +1,16 @@
 package main
 
-import "strconv"
+import (
+	"fmt"
+	"strconv"
+)
+
+const (
+	minGeoLongitude = -180.0
+	maxGeoLongitude = 180.0
+	minGeoLatitude  = -85.05112878
+	maxGeoLatitude  = 85.05112878
+)
 
 type coordinates struct {
 	latitude  float64
@@ -15,6 +25,20 @@ func (s *Server) handleGEOADDCmd(client *Client, message []string) (string, erro
 	}
 
 	key, longitude, latitude, member := message[4], message[6], message[8], message[10]
+	long, err := strconv.ParseFloat(longitude, 64)
+	if err != nil {
+		return fmt.Sprintf("-ERR invalid longitude,latitude pair %s,%s\r\n", longitude, latitude), nil
+	}
+
+	lat, err := strconv.ParseFloat(latitude, 64)
+	if err != nil {
+		return fmt.Sprintf("-ERR invalid longitude,latitude pair %s,%s\r\n", longitude, latitude), nil
+	}
+
+	if long < minGeoLongitude || long > maxGeoLongitude || lat < minGeoLatitude || lat > maxGeoLatitude {
+		return fmt.Sprintf("-ERR invalid longitude,latitude pair %f,%f\r\n", long, lat), nil
+	}
+
 	s.mu.Lock()
 	defer s.mu.Unlock()
 
@@ -24,9 +48,6 @@ func (s *Server) handleGEOADDCmd(client *Client, message []string) (string, erro
 	if s.geospatialEntry[key] == nil {
 		s.geospatialEntry[key] = make(map[string]coordinates)
 	}
-
-	lat, _ := strconv.ParseFloat(latitude, 64)
-	long, _ := strconv.ParseFloat(longitude, 64)
 
 	s.geospatialEntry[key][member] = coordinates{
 		latitude:  lat,
