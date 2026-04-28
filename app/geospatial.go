@@ -48,10 +48,19 @@ func (s *Server) handleGEOADDCmd(client *Client, message []string) (string, erro
 	if s.geospatialEntry[key] == nil {
 		s.geospatialEntry[key] = make(map[string]coordinates)
 	}
+	if s.sset[key] == nil {
+		s.sset[key] = make(map[string]float64)
+	}
 
 	s.geospatialEntry[key][member] = coordinates{
 		latitude:  lat,
 		longitude: long,
+	}
+
+	_, alreadyExists := s.sset[key][member]
+	s.sset[key][member] = 0
+	if alreadyExists {
+		return ":0\r\n", nil
 	}
 
 	return ":1\r\n", nil
