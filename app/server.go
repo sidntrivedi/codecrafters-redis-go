@@ -17,11 +17,12 @@ const (
 )
 
 type Server struct {
-	mu          sync.Mutex
-	kv          map[string]ValueEntry
-	sset        map[string]map[string]float64
-	waiters     map[string][]chan string
-	subscribers map[string]map[*Client]struct{}
+	mu              sync.Mutex
+	kv              map[string]ValueEntry
+	sset            map[string]map[string]float64
+	geospatialEntry map[string]map[string]coordinates
+	waiters         map[string][]chan string
+	subscribers     map[string]map[*Client]struct{}
 }
 
 type Client struct {
@@ -54,10 +55,11 @@ func main() {
 	// You can use print statements as follows for debugging, they'll be visible when running tests.
 	fmt.Println("Logs from your program will appear here!")
 	server := &Server{
-		kv:          make(map[string]ValueEntry),
-		sset:        make(map[string]map[string]float64),
-		waiters:     make(map[string][]chan string),
-		subscribers: make(map[string]map[*Client]struct{}),
+		kv:              make(map[string]ValueEntry),
+		sset:            make(map[string]map[string]float64),
+		geospatialEntry: make(map[string]map[string]coordinates),
+		waiters:         make(map[string][]chan string),
+		subscribers:     make(map[string]map[*Client]struct{}),
 	}
 
 	l, err := net.Listen("tcp", "0.0.0.0:6379")
@@ -235,6 +237,11 @@ func (s *Server) invokeCmdHandler(client *Client, message []string) (string, err
 		resp, err = s.handleZREMcmd(client, message)
 		if err != nil {
 			return "", fmt.Errorf("error calling ZREM cmd: %w", err)
+		}
+	case "GEOADD":
+		resp, err = s.handleGEOADDCmd(client, message)
+		if err != nil {
+			return "", fmt.Errorf("error calling GEOADD cmd: %w", err)
 		}
 	default:
 		if client.subscribeMode.enabled {
