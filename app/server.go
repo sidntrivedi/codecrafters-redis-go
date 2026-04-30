@@ -21,6 +21,7 @@ type Server struct {
 	kv          map[string]ValueEntry
 	sset        map[string]map[string]float64
 	keyVersions map[string]int64
+	config      map[string]string
 	waiters     map[string][]chan string
 	subscribers map[string]map[*Client]struct{}
 }
@@ -59,6 +60,7 @@ func main() {
 		kv:          make(map[string]ValueEntry),
 		sset:        make(map[string]map[string]float64),
 		keyVersions: make(map[string]int64),
+		config:      loadConfig(os.Args[1:]),
 		waiters:     make(map[string][]chan string),
 		subscribers: make(map[string]map[*Client]struct{}),
 	}
