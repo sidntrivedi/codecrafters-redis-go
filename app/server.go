@@ -262,12 +262,17 @@ func (s *Server) invokeCmdHandler(client *Client, message []string) (string, err
 	case "ACL":
 		resp, err = s.handleACLCmd(client, message)
 		if err != nil {
-			return "", fmt.Errorf("error calling GEOSEARCH cmd: %w", err)
+			return "", fmt.Errorf("error calling ACL cmd: %w", err)
 		}
 	case "WATCH":
 		resp, err = s.handleWATCHCmd(client, message)
 		if err != nil {
-			return "", fmt.Errorf("error calling GEOSEARCH cmd: %w", err)
+			return "", fmt.Errorf("error calling WATCH cmd: %w", err)
+		}
+	case "UNWATCH":
+		resp, err = s.handleUNWATCHCmd(client, message)
+		if err != nil {
+			return "", fmt.Errorf("error calling UNWATCH cmd: %w", err)
 		}
 	default:
 		if client.subscribeMode.enabled {

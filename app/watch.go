@@ -28,3 +28,19 @@ func (s *Server) markKeyModified(key string) {
 	}
 	s.keyVersions[key]++
 }
+
+func (s *Server) handleUNWATCHCmd(client *Client, message []string) (string, error) {
+	if client.queueCmds {
+		return "-ERR UNWATCH inside MULTI is not allowed\r\n", nil
+	}
+
+	if client.watchedKeys == nil {
+		return "+OK\r\n", nil
+	}
+
+	// Clear the watched keys for this client connection.
+	for k := range client.watchedKeys {
+		delete(client.watchedKeys, k)
+	}
+	return "+OK\r\n", nil
+}
