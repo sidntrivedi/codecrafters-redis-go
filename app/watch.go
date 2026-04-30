@@ -6,6 +6,7 @@ func (s *Server) handleWATCHCmd(client *Client, message []string) (string, error
 	}
 
 	if client.watchedKeys == nil {
+
 		client.watchedKeys = make(map[string]int64)
 	}
 
