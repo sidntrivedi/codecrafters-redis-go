@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 )
 
 const (
@@ -125,6 +126,63 @@ func (s *Server) handleGEODISTCmd(client *Client, message []string) (string, err
 	return fmt.Sprintf("$%d\r\n%s\r\n", len(distanceStr), distanceStr), nil
 }
 
+// handleGEOSEARCHCmd handles the GEOSEARCH redis cmd.
+func (s *Server) handleGEOSEARCHCmd(client *Client, message []string) (string, error) {
+	if client.queueCmds {
+		client.cmdList = append(client.cmdList, message)
+		return "+QUEUED\r\n", nil
+	}
+
+	if len(message) <= 16 || strings.ToUpper(message[6]) != "FROMLONLAT" || strings.ToUpper(message[12]) != "BYRADIUS" {
+		return "-ERR unsupported GEOSEARCH syntax\r\n", nil
+	}
+
+	key := message[4]
+	longitude, err := strconv.ParseFloat(message[8], 64)
+	if err != nil {
+		return fmt.Sprintf("-ERR invalid longitude,latitude pair %s,%s\r\n", message[8], message[10]), nil
+	}
+
+	latitude, err := strconv.ParseFloat(message[10], 64)
+	if err != nil {
+		return fmt.Sprintf("-ERR invalid longitude,latitude pair %s,%s\r\n", message[8], message[10]), nil
+	}
+
+	if longitude < MIN_LONGITUDE || longitude > MAX_LONGITUDE || latitude < MIN_LATITUDE || latitude > MAX_LATITUDE {
+		return fmt.Sprintf("-ERR invalid longitude,latitude pair %f,%f\r\n", longitude, latitude), nil
+	}
+
+	radius, err := strconv.ParseFloat(message[14], 64)
+	if err != nil {
+		return "", err
+	}
+
+	radiusMeters, ok := distanceToMeters(radius, message[16])
+	if !ok {
+		return "-ERR unsupported unit provided. please use m, km, ft, mi\r\n", nil
+	}
+
+	center := Coordinates{Latitude: latitude, Longitude: longitude}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	matches := make([]string, 0)
+	for _, entry := range sortedSetEntries(s.sset[key]) {
+		coordinates := decode(uint64(entry.score))
+		if haversineDistance(center, coordinates) <= radiusMeters {
+			matches = append(matches, entry.member)
+		}
+	}
+
+	resp := fmt.Sprintf("*%d\r\n", len(matches))
+	for _, member := range matches {
+		resp += fmt.Sprintf("$%d\r\n%s\r\n", len(member), member)
+	}
+
+	return resp, nil
+}
+
 // ===========================
 // Encoding logic for latitudes
 // and longitude.
@@ -224,6 +282,21 @@ func convertDistance(distance float64, unit string) (float64, bool) {
 		return distance * 3.280839895, true
 	case "mi":
 		return distance / 1609.344, true
+	default:
+		return 0, false
+	}
+}
+
+func distanceToMeters(distance float64, unit string) (float64, bool) {
+	switch unit {
+	case "m":
+		return distance, true
+	case "km":
+		return distance * 1000, true
+	case "ft":
+		return distance / 3.280839895, true
+	case "mi":
+		return distance * 1609.344, true
 	default:
 		return 0, false
 	}
