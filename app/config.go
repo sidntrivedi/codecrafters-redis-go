@@ -44,10 +44,10 @@ func loadConfig(args []string) map[string]string {
 	}
 
 	for i := 0; i < len(args); i++ {
-		name, ok := strings.CutPrefix(args[i], "--")
-		if !ok {
+		if !strings.HasPrefix(args[i], "--") {
 			continue
 		}
+		name := args[i][2:]
 
 		if key, value, hasValue := strings.Cut(name, "="); hasValue {
 			if _, ok := config[key]; ok {
