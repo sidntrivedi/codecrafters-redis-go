@@ -274,6 +274,11 @@ func (s *Server) invokeCmdHandler(client *Client, message []string) (string, err
 		if err != nil {
 			return "", fmt.Errorf("error calling UNWATCH cmd: %w", err)
 		}
+	case "CONFIG":
+		resp, err = s.handleCONFIGCmd(client, message)
+		if err != nil {
+			return "", fmt.Errorf("error calling CONFIG cmd: %w", err)
+		}
 	default:
 		if client.subscribeMode.enabled {
 			return "*2\r\n$4\r\npong\r\n$0\r\n\r\n", nil

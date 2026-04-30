@@ -119,7 +119,7 @@ func (s *Server) handleGEODISTCmd(client *Client, message []string) (string, err
 	distance := haversineDistance(decode(uint64(score1)), decode(uint64(score2)))
 	distance, ok := convertDistance(distance, unit)
 	if !ok {
-		return fmt.Sprintf("-ERR unsupported unit provided. please use m, km, ft, mi\r\n"), nil
+		return "-ERR unsupported unit provided. please use m, km, ft, mi\r\n", nil
 	}
 
 	distanceStr := strconv.FormatFloat(distance, 'f', 4, 64)
