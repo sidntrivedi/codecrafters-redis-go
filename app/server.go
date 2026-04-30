@@ -256,6 +256,11 @@ func (s *Server) invokeCmdHandler(client *Client, message []string) (string, err
 		if err != nil {
 			return "", fmt.Errorf("error calling GEOSEARCH cmd: %w", err)
 		}
+	case "ACL":
+		resp, err = s.handleACLCmd(client, message)
+		if err != nil {
+			return "", fmt.Errorf("error calling GEOSEARCH cmd: %w", err)
+		}
 	default:
 		if client.subscribeMode.enabled {
 			return "*2\r\n$4\r\npong\r\n$0\r\n\r\n", nil
