@@ -64,6 +64,7 @@ func (s *Server) handleSetCmd(client *Client, message []string) (string, error) 
 
 	var timeout time.Duration
 	hasTimeout := false
+	key := message[4]
 
 	// Check for EX and PX arguments with the SET command.
 	if len(message) > 8 && strings.ToLower(message[8]) == "ex" {
@@ -77,12 +78,16 @@ func (s *Server) handleSetCmd(client *Client, message []string) (string, error) 
 	}
 
 	// Write the key value pair to map.
-	s.kv[message[4]] = ValueEntry{
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	s.kv[key] = ValueEntry{
 		valueType: TypeString,
 		strValue:  message[6],
 		hasExpiry: hasTimeout,
 		expiresAt: time.Now().Add(timeout),
 	}
+	s.markKeyModified(key)
 	return "+OK\r\n", nil
 }
 

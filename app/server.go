@@ -20,6 +20,7 @@ type Server struct {
 	mu          sync.Mutex
 	kv          map[string]ValueEntry
 	sset        map[string]map[string]float64
+	keyVersions map[string]int64
 	waiters     map[string][]chan string
 	subscribers map[string]map[*Client]struct{}
 }
@@ -28,6 +29,7 @@ type Client struct {
 	conn          net.Conn
 	cmdList       [][]string
 	queueCmds     bool
+	watchedKeys   map[string]int64
 	subscribeMode SubscribeMode
 	messages      chan MessageInfo
 }
@@ -56,6 +58,7 @@ func main() {
 	server := &Server{
 		kv:          make(map[string]ValueEntry),
 		sset:        make(map[string]map[string]float64),
+		keyVersions: make(map[string]int64),
 		waiters:     make(map[string][]chan string),
 		subscribers: make(map[string]map[*Client]struct{}),
 	}

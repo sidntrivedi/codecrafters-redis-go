@@ -14,6 +14,7 @@ func handleDiscardCmd(client *Client) (string, error) {
 	// queueCmds to false.
 	client.queueCmds = false
 	client.cmdList = nil
+	client.watchedKeys = nil
 
 	return "+OK\r\n", nil
 }
@@ -26,9 +27,22 @@ func (s *Server) handleExecCmd(client *Client) (string, error) {
 		return "-ERR EXEC without MULTI\r\n", nil
 	}
 
+	s.mu.Lock()
+	for key, watchedVersion := range client.watchedKeys {
+		if s.keyVersions[key] != watchedVersion {
+			client.queueCmds = false
+			client.cmdList = nil
+			client.watchedKeys = nil
+			s.mu.Unlock()
+			return "*-1\r\n", nil
+		}
+	}
+	s.mu.Unlock()
+
 	queuedCmds := client.cmdList
 	client.queueCmds = false
 	client.cmdList = nil
+	client.watchedKeys = nil
 
 	resp := fmt.Sprintf("*%d\r\n", len(queuedCmds))
 
