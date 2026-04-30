@@ -14,6 +14,8 @@ const (
 
 	LATITUDE_RANGE  = MAX_LATITUDE - MIN_LATITUDE
 	LONGITUDE_RANGE = MAX_LONGITUDE - MIN_LONGITUDE
+
+	EARTH_RADIUS_METERS = 6372797.560856
 )
 
 // handleGeoAddCmd handles the GEOADD redis cmd.
@@ -91,6 +93,38 @@ func (s *Server) handleGEOPOSCmd(client *Client, message []string) (string, erro
 	return resp, nil
 }
 
+// handleGEODISTCmd handles the GEODIST redis cmd.
+func (s *Server) handleGEODISTCmd(client *Client, message []string) (string, error) {
+	if client.queueCmds {
+		client.cmdList = append(client.cmdList, message)
+		return "+QUEUED\r\n", nil
+	}
+
+	key, member1, member2 := message[4], message[6], message[8]
+	unit := "m"
+	if len(message) > 10 && message[10] != "" {
+		unit = message[10]
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	score1, ok1 := s.sset[key][member1]
+	score2, ok2 := s.sset[key][member2]
+	if !ok1 || !ok2 {
+		return "$-1\r\n", nil
+	}
+
+	distance := haversineDistance(decode(uint64(score1)), decode(uint64(score2)))
+	distance, ok := convertDistance(distance, unit)
+	if !ok {
+		return fmt.Sprintf("-ERR unsupported unit provided. please use m, km, ft, mi\r\n"), nil
+	}
+
+	distanceStr := strconv.FormatFloat(distance, 'f', 4, 64)
+	return fmt.Sprintf("$%d\r\n%s\r\n", len(distanceStr), distanceStr), nil
+}
+
 // ===========================
 // Encoding logic for latitudes
 // and longitude.
@@ -163,6 +197,36 @@ func decode(geoCode uint64) Coordinates {
 	gridLongitudeNumber := compactInt64ToInt32(y)
 
 	return convertGridNumbersToCoordinates(gridLatitudeNumber, gridLongitudeNumber)
+}
+
+func degreesToRadians(degrees float64) float64 {
+	return degrees * math.Pi / 180
+}
+
+func haversineDistance(from, to Coordinates) float64 {
+	lat1 := degreesToRadians(from.Latitude)
+	lat2 := degreesToRadians(to.Latitude)
+	dLat := degreesToRadians(to.Latitude - from.Latitude)
+	dLon := degreesToRadians(to.Longitude - from.Longitude)
+
+	a := math.Pow(math.Sin(dLat/2), 2) + math.Cos(lat1)*math.Cos(lat2)*math.Pow(math.Sin(dLon/2), 2)
+	c := 2 * math.Asin(math.Sqrt(a))
+	return EARTH_RADIUS_METERS * c
+}
+
+func convertDistance(distance float64, unit string) (float64, bool) {
+	switch unit {
+	case "m":
+		return distance, true
+	case "km":
+		return distance / 1000, true
+	case "ft":
+		return distance * 3.280839895, true
+	case "mi":
+		return distance / 1609.344, true
+	default:
+		return 0, false
+	}
 }
 
 // ===========================

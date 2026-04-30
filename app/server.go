@@ -246,6 +246,11 @@ func (s *Server) invokeCmdHandler(client *Client, message []string) (string, err
 		if err != nil {
 			return "", fmt.Errorf("error calling GEOPOS cmd: %w", err)
 		}
+	case "GEODIST":
+		resp, err = s.handleGEODISTCmd(client, message)
+		if err != nil {
+			return "", fmt.Errorf("error calling GEODIST cmd: %w", err)
+		}
 	default:
 		if client.subscribeMode.enabled {
 			return "*2\r\n$4\r\npong\r\n$0\r\n\r\n", nil
